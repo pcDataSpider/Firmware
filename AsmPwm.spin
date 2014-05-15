@@ -75,7 +75,7 @@ Init
 outPin := pins
 period := tperiod       
   
-pwmCog := cognew(@pwmEntry,@outPin)
+pwmCog := cognew(@pwmEntry,@outPin)+1
 return pwmCog
 
 pub Stop

@@ -5,84 +5,87 @@ Con
   _XINFREQ      = 5_000_000                          ' 5MHz Crystal
               
   nChannels     = 14   ' cant exceed 32.
-  nAnalogI      = 4 
+  nAnalogI      = 4    
   nAnalogO      = 2 
   nDigitals     = 8
 
   cDigitalPin   = 16   ' first digital pin#                              
-                      
-  EX_DAT_LEN = 50
-  btnMask       = %10000000 
-con
-  nKeys         = 10
+
+  SyncDelay = 80000000
+  INITAVG = 1 ' initial value for nAvg. number of ADC reads to average per sample
+  EX_DAT_LEN = 50   
+  ADCBUFFERLEN = 200    ' number of values a buffer will hold
+  ADCBUFFERBYTELEN = ADCBUFFERLEN * 2 * 4     ' number of bytes in a buffer
+  ERR           = 200  ' largest possible variance in tstamp of ADC data, and ideal sample rate, in clock cycles.
+  btnMask       = %10000000
+
+  DPIN1 = 24
+  DPIN2 = 25
+  DPIN3 = 26
+  DPIN4 = 27        
 obj
   Msg       : "Messager"
   ExecCB    : "MessageHandler"
   Stk       : "Stack Length"           'Include Stack Length Object
   pwm1      : "AsmPwm"                                  
-  pwm2      : "AsmPwm"   
+  pwm2      : "AsmPwm"
+ ' Streams   : "StreamData"  
 
-var        
-  long Stack[400]  
+var              
+  long Stack[400] 
+  long Stack2[400]  
   byte RDCOG   
   byte ADCCOG  
-  byte DIGCOG            
+  byte DIGCOG
+  byte DATCOG
+  byte MSGCOG
+              
 
 dat                                           
         ExData          long    0[EX_DAT_LEN]
-dat
-        org 0                                                                
-        version         long    11   
-        model           long    7  
-        nchans          long    nChannels
-        push            long    0
-        'freq            long    1015            ' period in instructions
-        set             long    0   
-        start           long    0
-        stop            long    0             
-        'read            long    0
 dat     ' channel related data
         org 0
         ' these values define different channels
-        Change          long 0                          ' bitmask for DAC channels whose parameters have changed. 1=change 0=no change
+        Change          long 0                          ' bitmask for ADC channels whose parameters have changed. 1=change 0=no change
         Channels        long %0000000000                ' bitmask for active channels. 1=on 0=off  
-        Rates           long 800000[nAnalogI]          ' sample rates for channels in clocks per sample
- 
-        ' next two values are set by the ADC loop 
-        lastVal         long 120[nAnalogI]             ' last value read / value set 
-        tstamp          long 0[nAnalogI]               ' time stamp of the last value read
-
+        Rates           long 80000[nAnalogI]          ' sample rates for channels in clocks per sample
+        chanFreqs       long 0
+        nAvg            long INITAVG                         ' number of ADC reads to average for one sample
+   
+        ' ADC buffer and buffer data
+        ADCBuffers      long 0[nAnalogI*ADCBUFFERLEN*2] ' time stamp of the last value read
+        curADCIdx       long 0[nAnalogI]                ' current position into the buffer of next val to read
+        lastTstamp      long 0[nAnalogI]                ' last tStamp from the ADC
+        streamRate      long 0[nAnalogI]                ' the samplerate for the current stream
         'pwm data
         pwmExec         long 0[nAnalogO]
         pwmData         long 0[nAnalogO]
+        'stream data
+        curStream       byte                            ' current OPEN stream index.
 
+        'Digitals data
         DigDir          long %00001111                  ' bitmask for channel directions (MSB set when changed)
-        DigOut          long %00000110                  ' state of output channels 
+        DigOut          long %00000000                  ' state of output channels 
         DigIn           long 0                  ' state of input channels (MSB set when changed)
-                                
-        dbg             long 0 
+
+        'Sync deadlines
+        nextSync        long 0
+        lastSync        long 0
+
+        'Debug names                        
+        dbg1            long 0 
         dbg2            long 0  
         dbg3            long 0 
         dbg4            long 0
-dat     ' name table
-        NameTable       byte    "version",0,"model",0,"nchannels",0,"push",0,"set",0,"start",0,"stop",0,"dir",0,"type",0,"wav",0
-                                                                          '    <set:chan#, val>
-dat     ' message strings
-        PushMsg         byte    "push",0        'static string for 'push' response   
-pub Main
+pub Main | n, i
     
   Stk.Init(@Stack, 80)                  'Initialize reserved Stack space (reserved below)
-                                           
-  ' init callback data
-  Table       := @version   
-  pChangeCB   := @Change  
-  pChannelsCB := @Channels  
-  pRatesCB    := @Rates
-  pPwmExecCB  := @pwmExec 
-  pPwmDatCB   := @pwmData
-  pDigInCB    := @DigIn 
-  pDigOutCB   := @DigOut 
-  pDigDirCB   := @DigDir
+  i:=0
+  repeat nAnalogI  
+    ADCBuffPos[i] := @ADCBuffers + (i * ADCBUFFERLEN*2)*4   
+    ADCBuffMax[i] := @ADCBuffers + ((i+1) * ADCBUFFERLEN*2)*4
+    curADCIdx[i] := i * ADCBUFFERLEN*2
+    i++         
 
   ' get PWM data                    
   pwmExec[0]:= pwm1.getChngAddr   
@@ -94,13 +97,13 @@ pub Main
 ' init data for ADC reader 
   pChange   := @Change
   pChannels := @channels 
-  pRates    := @Rates       
-  plastVal  := @lastVal
-  ptstamp   := @tstamp    
-  pDbg      := @dbg    
+  pRates    := @Rates
+  pnAvg     := @nAvg                   
+  pDbg1     := @dbg1   
   pDbg2     := @dbg2   
   pDbg3     := @dbg3
-  pDbg4     := @dbg4  
+  pDbg4     := @dbg4
+  ADClen    := (ADCBUFFERLEN*2*4)
   cs:= %00010000 ' pin bitmasks   '   %00010000
   din:=%00100000                 '   %00100000
   clk:=%01000000                 '   %01000000
@@ -111,18 +114,18 @@ pub Main
   pDigIn  := @DigIn
   pDigOut := @DigOut
   pDigDir := @DigDir
-  pDbgX   := @Dbg
+  pDbgX   := @Dbg1
 
 
 
+                                       
+  ExecCB.InitData(nAnalogI, nAnalogO, @nAvg, @pwmData, @pwmExec, 1015, @Change, @Channels, @Rates, @DigOut, @DigDir, @ChanFreqs)        
+  'Streams.Init                                        
 
-
-                                            
-  ' start message cog  
-  ExecCB.InitData(pwmData[0], pwmData[1], 1015)
-  if Msg.start(@Callback, @NameTable, nKeys)==0
+  MSGCOG:=Msg.start
+  if MSGCOG==0
     repeat
-      Msg.str(string("<Failed:com>")) ' lol, should this happen com wont work anyways... 
+      Msg.str(string("Failed to open Com")) ' lol, should this happen com wont work anyways... 
     Msg.stop
     return 0
               
@@ -134,70 +137,262 @@ pub Main
       Msg.Str(String("<Failed:locks>"))
     Msg.stop 
     return 0
-  LockIDCB:=LockID 'share lock with callback code.   
-                   
+                
   'Msg.Pause                     ' pause for user to start it!
-                   
-  pwm1.start( %0111, 1015)
+
+  lastSync:=cnt
+  nextSync:=lastSync+syncDelay
+                           
+  pwm1.start( %0111, 1015) 
   pwm1.changePwmAsm(000) 
   pwm2.start( %1000, 1015)
-  pwm2.changePwmAsm(000)   
-  ADCCOG:=cognew( @DACLoop, 0 )+1                       ' start ADC   
+  pwm2.changePwmAsm(000)
   DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
-  RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop  
+  RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
+  DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      
+            
+  'Msg.dec(DIGCOG)
+  'Msg.char("|")
+  'Msg.dec(RDCOG)
+  'Msg.char("|")
+  'Msg.dec(DATCOG)
+  'Msg.char("|")
 
-  
+pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,AvgCnt, addr, len, curRate, bitsLeft,chk
+  ' wait until a cog is available to start the ADC.
+
+    
+ dira[DPin1]~~
+ dira[DPin2]~~
+ dira[DPin3]~~
+
+     ' start ADC 
+  repeat  until ADCCOG > 0 
+    ADCCOG:=cognew(@ADCloop, 0 )+1                       ' start ADC
+  ExecCB.setADCCOG(ADCCOG, @ADCloop) 
+
+  ch:=0
+  repeat nAnalogI  
+    curADCIdx[ch] := ch * ADCBUFFERLEN*2
+    ch++
+    
+  repeat
+    ch := 0
+    repeat nAnalogI       
+      TogglePin(DPIN1)
+      'read in as much data as possible from this channel
+      curRate:=streamRate[ch] 
+      lastTime:=lastTstamp[ch]
+      beg:=curADCIdx[ch]
+      i:=beg
+      valCount:=0
+      chk:=9999 'chk should be reset to the return value of openStream(ch)
+                                                                 
+        
+      repeat while ADCBuffers[ i+1 ] <> 0 
+        'TogglePin(DPIN2)           
+        'TogglePin(DPIN3)
+        val:=ADCBuffers[ i ]
+        AvgCnt:=val>>25
+        val:=(val&$00FFFFFF) / AvgCnt  
+        time:= ADCBuffers[ i + 1 ]
+        if not ChanFreqs & (1<<ch)
+          'LowFreq mode..
+          SendPoint(time, val | (ch<<12) )
+        '  TogglePin(DPIN3)
+        '  TogglePin(DPIN3)
+        '  TogglePin(DPIN3)
+        else             
+          'ADCBuffers[ i + 1 ]:=0
+          'ADCBuffers[ i ]:=0                    78
+          
+      
+                          
+          'if (time-lastTime>(curRate+ERR) or time-lastTime<(curRate-ERR) or Streams.byteLeft(ch)=<4) and not Streams.isEmpty(ch) 
+          '  'time to send. Either buffer is full, or reached a non-consecutive value
+          '  longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in.  
+          '  sendStream(ch)
+          '  beg:=i
+          '  valCount:=0               
+                       
+        '  TogglePin(DPIN3)
+          ' test if this is the first byte in the stream.
+          if !isStreamOpen(ch)   
+            streamRate[ch]:= Rates[ch]*nAvg
+            curRate:=streamRate[ch] 
+            bitsLeft:=openStream(ch)
+            chk:=0
+            lastTime:=time-curRate 'reset lastTime
+
+            'transmit data  ( add curRate and time to stream. both 32bit values.
+
+            sendData:=curRate
+            repeat 2
+              N:=32
+              repeat until N<8
+                if bitsLeft 
+                  N:=N-4
+                  tmpByte:= bitsLeft | sendData>>N
+                  Msg.txData(tmpByte)  
+                  chk:=checksum(chk,tmpByte) 
+                  bitsLeft:=0  
+                else
+                  N:=N-8
+                  tmpByte:=sendData>>N   
+                  Msg.txData(tmpByte)  
+                  chk:=checksum(chk,tmpByte)
+              bitsLeft:=((sendData&15)<<4)|%1000000000   
+              sendData:=time  
+              
+            beg:=i
+            valCount:=0
+
+          ' test for non consecutive values
+          tmpByte:=time-lastTime
+          if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
+            longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in.  
+            closeStream(ch,chk,bitsLeft)
+            beg:=i
+            valCount:=0  
+            next ' just bail.  
+
+        '  TogglePin(DPIN3)
+          'add this value and move on.
+          if bitsLeft
+            tmp:= bitsLeft | val>>8
+            Msg.txData(tmp)  
+            chk:=checksum(chk,tmp)
+            Msg.txData(val)    
+            chk:=checksum(chk,val)
+            bitsLeft:=0
+          else
+            tmp:=val>>4    
+            Msg.txData(tmp)  
+            chk:=checksum(chk,tmp)
+            bitsLeft:=((val)<<4)|%100000000   
+        '  TogglePin(DPIN3)
+        valCount+=1          
+        ' move to the next long
+        lastTime:=time          
+        i+=2
+                      
+       ' TogglePin(DPIN2)     
+        if i => (ch+1) * ADCBUFFERLEN*2             
+          i:= ch * ADCBUFFERLEN*2   
+          quit 'give up time to OTHER channels  
+      longfill( @ADCBuffers + (beg*4), 0, valCount*2) 
+      curADCIdx[ch]:=i
+      lastTstamp[ch]:=lastTime
+      ' test if channel is active. If not, send any remaining data.
+      'TogglePin(DPIN4)
+      'close stream if it is currently open.
+      if isStreamOpen(ch)
+        closeStream(ch,chk,bitsLeft)
+      'if not ((1<<ch) & Channels) and not Streams.isEmpty(ch)
+      '  sendStream(ch)                                       
+      ch++
+      'TogglePin(DPIN4)
+
+                
+pri checksum(chksum, value)
+  return  ((((chksum<<1) | (chksum>>7)) & 255) + value) & 255
+pri openStream(ch):chk | blah
+if curStream
+  closeStream(curStream+1,0,0) 'close a bad stream. log an error.
+  ExData[0]:=9999  
+  Msg.sendControl(1,@ExData,1)
+curStream:=ch+1
+Msg.lock                                  'meatloaf
+return (%1000 | ch)<<4 
+pri closeStream(ch,chk,bitsLeft) | blah
+if bitsLeft
+  Msg.char(bitsLeft)
+Msg.txEOP
+Msg.char(chk)
+Msg.clear
+curStream:=0
+return
+pri isStreamOpen(ch)
+  if curStream==ch+1
+    return true
+  else
+    return false     
+
+'pub sendStream(i) | addr, len
+'  len:=Streams.getLen(i)
+'  addr:=Streams.getAddr(i)
+'  Msg.lock            
+'  if len=<1  
+'    Msg.clear 
+'    Streams.reset(i)   
+'  else                                  
+'    repeat len
+'      Msg.char(byte[addr++])
+'    Msg.txEOP  
+'    Msg.clear
+'    Streams.reset(i) 
+       
 pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, duty, inc
 
 
-  duty:=0
+  duty:=0                                                 
   inc:=1
 
 
   repeat
     ' check buffer.
-    Msg.checkKeys    
-    ' check push-button
-    if not ina & btnMask and not pushed
-      pushed~~
-      
-      Msg.sendKey(String("push"),4,@ExData,0,1)         
-      'Msg.sendRepeat( @PushMsg,4, 1 ) 
-    if pushed and ina & btnMask
-      pushed~     
-                                 
-    repeat until not lockSet(LockID)
-    n:=0
-    mask:=1                 
-    repeat nAnalogI        
-      'if Channels&mask and lastVal[n]
-      if lastVal[n]  
-        sendVal( tstamp[n], n, lastVal[n]&$FFFF )
-        lastVal[n]:=0
-      n++
-      mask<<=1
-      
-    lockClr(LockID)
-
+    Msg.checkKeys            
+    'test for hanshake timing
+    CurCnt:=cnt
+    if CurCnt>nextSync and (nextSync>lastSync or CurCnt<lastSync)
+      sendSync
+    'test digitals
     curVal:=DigIn~
     if curVal                                                       
-      sendDig(cnt,curVal&$7FFFFFFF) 
+      sendDig(cnt,curVal&$7FFFFFFF)
 
+    ' test debug values
+    if dbg1 <> 0
+      ExData[0]:=dbg1     
+      ExData[1]:=dbg2        
+      ExData[2]:=dbg3          
+      ExData[3]:=dbg4
+      ExData[4]:=999
+      Msg.SendControl(1,@ExData,5)
+      dbg1:=0
+      dbg2:=0
+      dbg3:=0
+      dbg4:=0
+
+pub sendSync
+  ExData[0]:=cnt
+  if nextSync < lastSync
+    ExData[1]:=1
+    Msg.sendControl(13,@ExData,2)
+  else
+    Msg.sendControl(13,@ExData,1)
+  lastSync:=nextSync
+  nextSync:=nextSync+SyncDelay
 pub sendDig( t,v ) 
  ' send a message   
   ExData[0]:=v   
     ExData[1]:=t 
  ' send a message
-  Msg.sendKey(String("d"),1,@ExData,2,1)                        
-pub sendVal( t, c, v)
-  ExData[0]:=c               '                       chan    value
-    ExData[1]:=v             '   00000000,00000000, 000000 00,00000000
-  ExData[2]:=t    
+  Msg.sendControl(10,@ExData,2)                        
+
+pub sendPoint(t,v )   
+ ' send a message   
+  ExData[0]:=v   
+  ExData[1]:=t     
+  ExData[2]:=t 
  ' send a message
-  Msg.sendKey(String("p"),1,@ExData,3,0)  
+  Msg.sendControl(12,@ExData,3)          
 pub WaitMS(MS)                
   waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS
 
+pub TogglePin(Pin)
+ {{toggles the debugging pin to check with a scope/LED}} 
+ !outa[Pin]
 DAT
 org 0
 DigitalLoop
@@ -220,7 +415,7 @@ DigitalLoop
               mov       outa,   chanOut 
                                                  
               jmp   #:loop
-' --------------------                              <name:content,rst,rst,rst>
+' --------------------                              
                                                     
 readInput                            
               'shr       prevInput,  #cDigitalPin    ' shift back so that pin# -> channel# 
@@ -273,7 +468,7 @@ Neg1_2        long      -1
 DAT
                                                                                                                                                      
 org 0 'Reset assembly pointer
-DACLoop
+ADCLoop
         ' reset pin directions
         or    dira,     clk     
         or    dira,     cs  
@@ -342,9 +537,9 @@ DbgWait
         if_nz or        tx4,    #%01  
               wrlong    tx4, pdbg2   
               wrlong    curCnt, pdbg3    
-              wrlong    cmask, pdbg 
+              wrlong    cmask, pdbg1
 
-:wait         rdlong    tmp,    pdbg            WZ
+:wait         rdlong    tmp,    pdbg1           WZ
         if_nz jmp       #:wait
 
         ' restore z flag
@@ -370,24 +565,34 @@ ChUpdate
               call      #Lock 
               ' -- reread bitmasks
               rdlong    changed,pChange
-              rdlong    chAct,  pChannels    
+              rdlong    chAct,  pChannels
+              ' -- reread nAvg
+              rdlong    ADCnAvg,    pnAvg           WZ
+        if_z  mov       ADCnAvg,    #1  
               ' -- reset instructions
               movd      :get,   #Delay        
               movd      :set,   #Dline         
               movd      :add,   #Dline         
               movs      :add,   #Delay
+              movd      :resetSum, #ADCAvg
+              movd      :resetAvg, #ADCAvgCnt  
               ' -- reset counters
               mov       cmask,  #1
               mov       pOff,   #0
               mov       count,  #nAnalogI 
               ' loop for each channel
 :loop
-              ' -- read in new rate and reset deadline for this channel                       
+              ' -- read in new rate and reset deadline + averages for this channel                       
               mov       tmp,    pRates
               add       tmp,    pOff  
 :get          rdlong    vxm,    tmp
 :set          mov       vxm,    curCnt                  ' save current time as new deadline
 :add          add       vxm,    vxm           WC                  ' add first offset
+              mov       tmp,    #0
+:resetSum     mov       vxm,    tmp
+              mov       tmp,    ADCnAvg
+:resetAvg     mov       vxm,    tmp
+
 :loop_end     ' -- increment all counters and instructions
               shl       cmask,  #1
               add       pOff,   #4
@@ -403,26 +608,55 @@ ChUpdate
 ChUpdate_ret  ret   
 '************************************
 Act
-              'xor       outa,       cmask
               call      #ReadADC
-              ' force non-zero number
-      '        cmp       tmpval,#0             wz
-      '  if_z  mov       tmpval,#1
-              or        tmpval,valSetBit
+:avgval
+              mov tx2,  curCh
+              mov tx1,  tx2                             
+              add tx1,  #ADCAvg
+              add tx2,  #ADCAvgCnt
+              movd      :addval,tx1
+              movd      :inccnt,tx2   
               
-              mov       ts,     cnt             ' cnt only works as source operand.
-              mov       tx1,    curCh           ' get address for lastVal
-              shl       tx1,    #2
-              add       tx1,    plastVal
-              mov       tx2,    curCh           ' get address for tstamp
-              shl       tx2,    #2
-              add       tx2,    ptstamp
-              
-              call      #Lock                   ' take out lock for shared mem
-              wrlong    tmpval, tx1             ' write the value of the ADC to main mem
-              wrlong    ts,     tx2             ' write the time stamp as well.
-              call      #Clear                  ' return lock
-              
+:addval       add       vxm,    tmpval          ' add this value into the average
+:inccnt       sub       vxm,    #1         WZ   ' add 1 to the current avg count.
+if_nz         jmp       #:done                  ' jump if not enough values to average
+                                      
+              movd      :resetsum,tx1
+              movd      :resetcnt,tx2
+              movd      :addAvgCnt, tx1
+              movd      :wrVal, tx1  
+:resetcnt     mov       vxm,    ADCnAvg
+              mov       tx3,    ADCnAvg
+              shl       tx3,    #25
+:addAvgCnt    or        vxm,    tx3
+
+:saveval
+              mov       ts,     cnt             ' tmp var needed, as cnt only works as source operand
+              cmp       ts,     #0              WZ' make sure timestamp is not zero
+        if_z  mov       ts,     #1
+              mov       tx2,    curCh           ' start calculating address into current buffer..
+
+              mov       tx1,    tx2
+              add       tx2,    #ADCBuffPos              ' add 4 to get the current offset
+              movs      :rdPos, tx2
+              movd      :wrPos, tx2  
+              add       tx1,    #ADCBuffMax              ' add 4 to get the current offset
+              movs      :rdMax, tx1
+                                      
+:rdPos        mov       tx2,    vxm             ' read in the current position in the buffer
+:rdMax        mov       tx1,    vxm             ' read in the maximum position of the current buffer
+              rdlong    tx3,    tx2             WZ' read in the next value to tset for zero      
+:wrVal  if_z  wrlong    vxm, tx2             ' write ADC data(the avg sum) into the buffer
+        if_z  add       tx2,    #4
+        if_z  wrlong    ts,     tx2             ' write timestamp into the buffer
+        if_z  add       tx2,    #4
+        if_z  cmp       tx2,    tx1             WC
+ if_z_and_nc  sub       tx2,    ADCLen
+                     
+:wrPos        mov       vxm,    tx2    
+:resetsum     mov       vxm,    #0
+
+:done    
 Act_ret       ret
 
 
@@ -471,12 +705,19 @@ ClkPulse
               andn      outa,   clk  
               nop
               nop                 
-ClkPulse_ret  ret             
-                                
+ClkPulse_ret  ret
+                                                      
                        'P876543210
 chAct         long      0       ' bit mask of activated channels
 DLine         long      0[nAnalogI]            ' next deadline for each channel
 Delay         long      0[nAnalogI]            ' how much of a delay between deadlines for each channel
+              
+ADCBuffPos    long      0[nAnalogI]
+ADCBuffMax    long      0[nAnalogI]
+
+ADCAvg        long      0[nAnalogI]  ' sum of samples so far
+ADCAvgCnt     long      INITAVG[nAnalogI]  ' number of samples averaged so far (counts down)
+ADCnAvg       long      INITAVG      ' number of ADC reads to average per sample
 
 changed       long      0       ' bit mask of channels that have changed recently 
 count         long      0       ' counter for number of channels   
@@ -484,6 +725,9 @@ cmask         long      0       ' bitmask of current channel
 curCh         long      0       ' current channel    
 ADCcount      long      0       ' counter for ADC loop
 pOff          long      0       ' used in chUpdate and Act while changing the offsets into the arrays,    
+                  
+
+
 ' clock control
 curCnt        long      0       ' curent clock count
 lastCnt       long      0       ' last clock count
@@ -500,6 +744,8 @@ ts            long      0       ' used to capture the timestamp while the ADC re
 tmp           long      0       ' temp var, assumed to be invalid after ever 'call'
 tx1           long      0       ' temp var, used in Act
 tx2           long      0       ' temp var, used in Act
+tx3           long      0       ' temp var, used in Act
+
 vxm           long      0       ' dummy name for dynamic operands (never actually used, operand overwriten)
 
 ' constants larger than $1FF. 
@@ -507,15 +753,15 @@ crate         long      $3FF
 hex200        long      $200
 hex201        long      $201                    
 maxlong       long      $FFFFFFFF             
-valSetBit     long      $10000  ' bit set when a value is read from ADC 
+valSetBit     long      $10000  ' bit set when a value is read from ADC
+ADCLen        long      $0      ' the number of bytes in the global buffer        
 ' values are initialized before cog start.
 pChange       long      0
 pChannels     long      0
-pRates        long      0   
-plastval      long      0
-ptstamp       long      0
+pRates        long      0
+pnAvg         long      0
                           
-pDbg          long      0    
+pDbg1         long      0    
 pDbg2         long      0   
 pDbg3         long      0
 pDbg4         long      0 
@@ -530,557 +776,4 @@ LockID        long      0
 fit
 
 
-dat
-Callbackdbg
-              org       0
-              mov       pLockAddr, par
-              mov       exit,   #1
-              wrlong    exit,   pLockAddr 
-              cogid     MyID    'get the ID of the cog I'm running in  
-              cogstop   MyID    'use the ID to terminate myself
-               
-Callback      
-{ does stuff }
-              org       0
-              ' PAR is the address of pLockAddr.
-              mov       pLockAddr,  PAR ' retrieves data locations from passed parameter
-              add       pNameAddr,  PAR  
-              add       pNameSize,  PAR  
-              add       pNameNum ,  PAR 
-              add       pNameIdx ,  PAR 
-              add       pValAddr,   PAR   
-              add       pValSize,   PAR
-              add       pValNum,    PAR   
-              add       pRetData,   PAR   
-              add       pExData,    PAR           
-              rdlong    Idx,        pNameNum
-              mov       exit,       #0      
-              ' get previous value out of the table 
-              mov       Data,       Table 
-              add       Data,       Idx   ' add 4 times, to increase by longs instead of bytes. ( Data += Idx * 4 )
-              add       Data,       Idx
-              add       Data,       Idx
-              add       Data,       Idx
-              rdlong    retv,       Data
-              ' test if this val is a number,empty,or string
-              rdlong    nArgs,       pValNum
-              cmp       nArgs,       #0          WZ      ' true if val is empty      
-        if_nz call      #writeNum
-              jmp       #check
-' ***********************************************
-              
-Check         ' test for certain keys, in order to act upon changes   
-              'call      #LockCB
-              call      #Blink
-                                                       
-              cmp       Idx,    #5              WZ      ' test for "start" 
-        if_z  call      #StartChannel                                               
-              cmp       Idx,    #6              WZ      ' test for "stop" 
-        if_z  call      #StopChannel                               
-              cmp       Idx,    #4              WZ      ' test for "set" 
-        if_z  call      #SetChan                                          
-              cmp       Idx,    #7              WZ      ' test for "dir"
-        if_z  call      #SetChanDir                     
-              cmp       Idx,    #8              WZ      ' test for "type"
-        if_z  call      #TestChanType                   
-                                                                                            
-              call      #ClearCB
-           '  finish -----------     
-              jmp       #Done 
-
-Done         
-              wrlong    retv,   pRetData
-              cmp       exit,   #0              WZ
-        if_z  mov       exit,   #1            
-              wrlong    exit,   pLockAddr
-              cogid     MyID    'get the ID of the cog I'm running in  
-              cogstop   MyID    'use the ID to terminate myself
-
-' **************************** SUBROUTINES ***************************
-writeNum      rdlong    tmp1,   pExData    
-              wrlong    tmp1,   Data
-'              mov       exit,   #2
-writeNum_ret  ret                   
-' -------------------------------
-
-LockCB          ' save C flag
-'              mov       tmp1,   #0           
-'        if_c  mov       tmp1,   #1
-              mov       dira,   #3
-              mov       outa,   #3
-              call      #Blink
-              lockset   LockIDCB                WC
-        if_c  jmp       #LockCB
-              ' restore C flag
-'              cmp       tmp1,   #2              WC  
-LockCB_ret    ret
-
-ClearCB     
-              lockclr   LockIDCB
-ClearCB_ret   ret        
-' -------------------------------
-getChn        mov       tmp1,   #8                      ' load offset into data table to find channel                           
-              add       tmp1,   Table                   ' find address of channel   
-              rdlong    tmp1,   tmp1                    ' read channel
-              mov       tmp2,   #1
-              shl       tmp2,   tmp1                    ' get bit mask for channel
-
-getChn_ret    ret       
-' -------------------------------
-getIdx        mov       tmp1,   pNameIdx
-              rdlong    tmp1,   tmp1
-              cmp       tmp1,   Neg1            WZ
-        if_z  mov       tmp1,   #0
-              
-getIdx_ret    ret         
-' -------------------------------
-SetADCChange          
-              call      #getChn                         ' returns the value of channel in tmp1 with a bitmask for channel in tmp2
-              rdlong    tmp1, pChangeCB              ' read current changed value
-              or        tmp1, tmp2                   ' or it with current channel
-              wrlong    tmp1, pChangeCB              ' write it back
-              ' dummy test..
-              'mov       tmp1,   #$1FF
-              'wrlong    tmp1,   pChangeCB
-SetADCChange_ret ret      
-' -------------------------------
-ChangeRate               
-                        nop
-                        nop
-                        nop     
-
-              cmp       nArgs,  #1              WC      ' test if there were arguments. C flag used later  
-              rdlong    tmp3,   pExData                 ' load first value of key into memory
-                                    
-              'call      #getChn
-              call      #getIdx                         ' tmp1 = channel
-              
-              mov       tmp2,   pRatesCB                ' load Rate Table Address
-              shl       tmp1,   #2                      ' tmp1 = channel * 4   
-              add       tmp2,   tmp1                    ' tmp2 = @Rate[channel]
-                 
-:loadrate     rdlong    retv,   tmp2   
-:write  if_nc wrlong    tmp3,   tmp2                    ' write new rate into the Rates table if there were any args
-                           
-ChangeRate_ret          ret
-                          
-' -------------------------------
-StartChannel
-          
-              cmp       nArgs,  #1              WC      ' test if there were arguments. C flag used later
-if_c          jmp       #:end
-
-              rdlong    tmp2,   pExData         WZ      ' read first arg as a bitmask. test if 0. 
-              rdlong    tmp1,   pChannelsCB             ' read current active channels  
-              or        tmp1,   tmp2                    ' or it with current channel   
-              wrlong    tmp1,   pChannelsCB             ' write it back
-:markchange
-              rdlong    tmp1, pChangeCB              ' read current changed value
-              or        tmp1, tmp2                   ' or it with current channel
-              wrlong    tmp1, pChangeCB              ' write it back
-:end          rdlong    retv,   pChannelsCB             ' load pChannelsCB into the return value.                
-StartChannel_ret        ret
-             
-' -------------------------------
-StopChannel    
-
-              cmp       nArgs,  #1              WC      ' test if there were arguments. C flag used later
-if_c          jmp       #:end
-
-if_nc         rdlong    tmp2,   pExData         WZ      ' read first arg as a bitmask. test if 0.
-if_c_or_z     call      #getChn
-              rdlong    tmp1,   pChannelsCB             ' read current active channels
-              andn      tmp1,   tmp2                    ' and it with inverse of current channel 
-              wrlong    tmp1,   pChannelsCB             ' write it back
-:markchange
-              rdlong    tmp1, pChangeCB              ' read current changed value
-              or        tmp1, tmp2                   ' or it with current channel
-              wrlong    tmp1, pChangeCB              ' write it back   
-:end          rdlong    retv,   pChannelsCB             
-StopChannel_ret         ret
-TestChanType
-              cmp       nArgs,  #1              WZ      ' test if there were arguments.
-        if_nz jmp       #TestChanType_ret
-              rdlong    tmp1,   pExData 
-              mov       tmp3,   #nAnalogI
-              mov       tmp4,   #4
-              add       tmp4,   pExData
-              mov       exit,   #3
-              mov       retv,   #2
-              
-              cmp       tmp1,   tmp3            wc
-        if_c  mov       tmp2,   #0
-        if_c  wrlong    tmp2,   tmp4 
-        if_c  jmp       #TestChanType_ret  
-              add       tmp3,   #nAnalogO         
-              cmp       tmp1,   tmp3            wc 
-        if_c  mov       tmp2,   #1
-        if_c  wrlong    tmp2,   tmp4 
-        if_c  jmp       #TestChanType_ret
-              add       tmp3,   #nDigitals
-              cmp       tmp1,   tmp3            wc 
-        if_c  mov       tmp2,   #2
-        if_c  wrlong    tmp2,   tmp4  
-        if_c  jmp       #TestChanType_ret
-
-TestChanType_ret        ret
-' -------------------------------
-SetChanDir
-              cmp       nArgs,  #0              WZ      ' test if there were arguments 
-              rdlong    retv,   pDigDirCB
-              or        retv,   MSBCB
-              xor       retv,   MSBCB           ' clear MSB
-              'mov       retv,   #56
-                 
-        if_z  jmp       #SetChanDir_ret
-              cmp       nArgs,  #1              WZ
-        if_z  jmp       #:setAllDir
-              cmp       nArgs,  #2              WZ
-        if_z  jmp       #:setChanDir
-              jmp       #SetChanDir_ret
-
-:setChanDir 
-              rdlong    tmp1,   pExData
-              mov       tmp2,   #4
-              add       tmp2,   pExData
-              rdlong    tmp2,   tmp2
-              ' tmp1 = chan 9 -> n
-              ' tmp2 = new dir (zero or non-zero)
-              cmp       tmp2,   #0              WZ
-                                      
-              mov       tmp3,   retv         
-              'tmp3 = current chan dirs
-              mov       tmp4,   #1
-              shl       tmp4,   tmp1
-              shr       tmp4,   #nAnalogI
-              shr       tmp4,   #nAnalogO  
-              ' tmp4 = 1 << (0 -> nDigitals)  
-        if_nz or        tmp3,   tmp4
-        if_z  xor       tmp4,   tmp4
-        if_z  and       tmp3,   tmp4
-              ' tmp3 = new chan dirs
-              jmp #:write 
-:setAllDir
-              rdlong    tmp3,   pExData
-              ' tmp3 = new chan dirs                    
-
-:write        or        tmp3,   MSBCB           ' set MSB to indicate change
-              wrlong    tmp3,   pDigDirCB 
-SetChanDir_ret          ret 
-' -------------------------------
-SetChan   
-
-              cmp       nArgs,  #0              WZ      ' test if there were arguments. C flag used later
-        if_z  mov       exit,   #4
-        if_z  jmp       #SetChan_ret 
-              cmp       nArgs,  #1              WZ      ' test if there was only one argument
-        if_z  mov       exit,   #3
-        if_z  mov       retv,   #2
-             
-              rdlong    tmp1,   pExData                 ' load first value of key into memory (chn index)
-              mov       tmp2,   #4
-              add       tmp2,   pExData                 ' load second value of key into memory (new duty)
-              rdlong    tmp2,   tmp2
-                                           
-              mov       tmp3,   #nAnalogI
-              cmp       tmp1,   tmp3            wc 
-        if_c  jmp       #:SetAnalogI     
-              add       tmp3,   #nAnalogO
-              cmp       tmp1,   tmp3            wc 
-        if_c  jmp       #:SetAnalogO 
-              add       tmp3,   #nDigitals
-              cmp       tmp1,   tmp3            wc 
-        if_c  jmp       #:SetDigitalO 
-
-:SetAnalogI
-              call      #GetSampRate                
-if_nz         call      #ChngSampRate
-              jmp       #SetChan_ret   
-:SetAnalogO
-              call      #getDuty
-if_nz         call      #ChngDuty
-              jmp       #SetChan_ret  
-:SetDigitalO
-              call      #getDigitalOut
-if_nz         call      #SetDigitalOut
-              jmp       #SetChan_ret
-       
-SetChan_ret          ret
-                  
-' -------------------------------
-
-
-GetSampRate   ' must leave Z flag, tmp1, and tmp2 intact  
-              'tmp1 = chan 0->nAnalogI
-              'retv = store rate   
-:loadaddr     mov       tmp4,   tmp1
-              mov       tmp3,   pRatesCB                ' load Rate Table Address
-              shl       tmp1,   #2                      ' tmp1 = channel * 4   
-              add       tmp3,   tmp1                    ' tmp3 = @Rate[channel]   
-                 
-:loadrate     rdlong    tmp1,   tmp3
-
-:saverate     mov       tmp3,   #4
-              add       tmp3,   pExData                 
-              wrlong    tmp1,   tmp3                    ' write rate to second value
-                            
-              mov       tmp1,   tmp4 
-              'tmp1 = channel 8->9 
-GetSampRate_ret         ret
-        
-' -------------------------------      
-GetDuty       ' must leave Z flag, tmp1, and tmp2 intact 
-              ' tmp1 = channel 8->9  
-              ' retv = store duty
-:loadaddr     mov       tmp4,   tmp1            'save
-              sub       tmp1,   #nAnalogI       'index from 0
-              shl       tmp1,   #2              ' x4
-              add       tmp1,   pPwmDatCB       ' calculate table address       
-              rdlong    tmp1,   tmp1            ' load real address
-              'tmp1 = pData           
-                                
-              mov       tmp3,   tmp1
-              add       tmp3,   #20
-:loadduty     rdlong    tmp1,   tmp3            ' save new duty value
-:saveduty     mov       tmp3,   #4
-              add       tmp3,   pExData         
-              wrlong    tmp1,   tmp3            ' write duty to second value
-                                 
-              mov       tmp1,   tmp4 
-              'tmp1 = channel 8->9 
-GetDuty_ret   ret
-           
-' -------------------------------
-GetDigitalOut ' must leave Z flag, tmp1, and tmp2 intact 
-              ' tmp1 = channel 9 -> n (irrelevant for digitals, sens all pins anyways)
-                                              
-              mov       tmp4,   tmp1            'save  
-              rdlong    tmp3,   pDigOutCB
-              'shr       tmp3,   #cDigitalPin
-              mov       tmp1,   #4
-              add       tmp1,   pExData
-              wrlong    tmp3,   tmp1
-              mov       tmp1,   tmp4
-              ' tmp1 = channel 9 -> n
-GetDigitalOut_ret       ret
-              
  
-' -------------------------------
-              
-              
-
-
-ChngSampRate
-              'tmp1 = chan 0->nAnalogI
-              'tmp2 = new rate 
-              mov       tmp3,   pRatesCB                ' load Rate Table Address
-              shl       tmp1,   #2                      ' tmp1 = channel * 4   
-              add       tmp3,   tmp1                    ' tmp3 = @Rate[channel]
-                 
-':loadrate     rdlong    retv,   tmp3   
-:write        wrlong    tmp2,   tmp3                    ' write new rate into the Rates table if there were any args  
-
-:markchange   shr       tmp1,   #2                      ' shift back to 0->nAnalogI
-              mov       tmp2,   #1
-              shl       tmp2,   tmp1                    ' make bitmask of channel
-              rdlong    tmp1,   pChangeCB               ' read current changed value
-              or        tmp1,   tmp2                    ' or it with current channel
-              wrlong    tmp1,   pChangeCB               ' write it back
-               
-ChngSampRate_ret        ret
-   
-' -------------------------------
-
-ChngDuty
-              ' tmp2 = new duty
-              ' tmp1 = channel 8->9
-              sub       tmp1,   #nAnalogI       'index from 0
-              shl       tmp1,   #2              ' x4
-              add       tmp1,   pPwmDatCB       ' calculate table address       
-              rdlong    tmp1,   tmp1            ' load real address
-              'tmp1 = pData
-                                
-              mov       tmp3,   tmp1
-              add       tmp3,   #24
-              wrlong    tmp2,   tmp3            ' save new duty value
-              
-              mov       tmp3,   tmp1
-              add       tmp3,   #20
-              'tmp3 = pPeriod
-              rdlong    tmp3,   tmp3
-              'tmp3 = period
-                                
-                             
-                                                                        
-
-              mov       maxT,    tmp3
-              sub       maxT,    minOff
-              sub       maxT,    minOn
-
-              mov       maxDuty, tmp3
-              sub       maxDuty, minOff
-                                   
-              cmp       tmp2,   minOn           wz, wc 
-        if_z  mov       onTime, #1 
-              nop                      ' <--- WHY?!
-        if_z  mov       OffTime,MaxT
-        if_z  jmp       #:done   
-
-        if_c  mov       onTime, #0
-        if_c  mov       offtime,maxT
-        if_c  add       offTime,#1
-        if_c  jmp       #:done  
-                                    
-              
-              cmp       tmp2,   maxDuty         wz, wc
-        if_z  mov       onTime, maxT
-        if_z  mov       offTime,#1 
-        if_z  jmp       #:done
-
-if_nz_and_nc  mov       onTime, maxT
-if_nz_and_nc  add       onTime, #1
-if_nz_and_nc  mov       offTime,#0
-if_nz_and_nc  jmp       #:done
-
-              mov       OnTime, tmp2
-              sub       OnTime, minOn
-
-              mov       OffTime,tmp3
-              sub       OffTime,tmp2
-              sub       OffTime,minOff 
-              jmp       #:done
-     
-:done
-
-              mov       Times,  OffTime
-              shl       Times,  #16
-              or        Times,  OnTime  
-              mov       tmp3,   tmp1
-              add       tmp3,   #16
-              wrlong    Times,  tmp3            ' save Times
-
-              mov       tmp3,   tmp1
-              add       tmp3,   #4
-              wrlong    OnTime, tmp3            ' save OnTime  
-              mov       tmp3,   tmp1
-              add       tmp3,   #8
-              wrlong    OffTime,tmp3            ' save OffTime
-              mov       tmp3,   tmp1
-              add       tmp3,   #12
-              mov       tmp2,   #1
-              wrlong    tmp2,   tmp3              ' set changed
-                                       
-ChngDuty_ret  ret
-' -------------------------------
-SetDigitalOut 'tmp1 = chan 6 -> n 
-              'tmp2 = new level ( zero, nonzero, or bitmask if MSB is set )
-
-              mov       tmp4,   tmp2   
-              and       tmp4,   MSBCB
-              cmp       tmp4,   #0              WZ      ' test MSB 
-
-'              jmp       #:setchan 
-        if_z  jmp       #:setchan
-        if_nz jmp       #:setall
-        
-:setall       'shl       tmp2,   #cDigitalPin
-              wrlong    tmp2,   pDigOutCB
-              jmp       SetDigitalOut_ret
-                   
-:setchan               
-              sub       tmp1,   #nAnalogI
-              sub       tmp1,   #nAnalogO
-              mov       tmp3,   #1
-              shl       tmp3,   tmp1       
-              ' tmp3 = 1 << (0 -> nDigitals)
-
-                                    
-              rdlong    tmp4,   pDigOutCB
-              'mov       tmp1,   Neg1
-              'xor       tmp3,   tmp1    
-              or        tmp4,   tmp3            ' clear selected bit (xxxxx & 11011 = xx0xx)
-              xor       tmp4,   tmp3
-              'xor       tmp3,   tmp1                                          
-              cmp       tmp2,   #0              WZ                            
-        if_nz or        tmp4,   tmp3                 
-              wrlong    tmp4,   pDigOutCB  
-              
-              jmp       SetDigitalOut_ret  
-                                     
-SetDigitalOut_ret       ret
-' **********************
-Blink       
-
-              mov       dira,   PinCB
-:loop                             
-              mov       TimeCB,   cnt
-              add       TimeCB,   #9
-              xor       outa,   PinCB
-              mov       tmp1,   DelayCB
-              call      #WaitD
-              'xor       outa,   PinCB   
-              'waitcnt   TimeCB,   DelayCB     
-              
-Blink_ret     ret
-
-WaitD         djnz tmp1,        #WaitD
-WaitD_ret     ret
-                          
- 
-
-Neg1          long -1
-MSBCB         long  $80000000    
-PinCB         long  |<1
-DelayCB       long  1000000
-TimeCB        long 0   
-              
-                                                                                                
-MyID          long 0
-
-pLockAddr     long 0  
-pNameAddr     long 4 
-pNameSize     long 8   
-pNameNum      long 12   
-pNameIdx      long 16    
-pValAddr      long 20 
-pValSize      long 24
-pValNum       long 28   
-pRetData      long 32
-pExData       long 36
-                     
-Table         long 0 
-Idx           long 0
-Data          long 0
-nArgs         long 0
-                       
-pChangeCB     long 0
-pChannelsCB   long 0
-pRatesCB      long 0
-pOffsetsCB    long 0
-
-pPwmExecCB    long 0
-pPwmDatCB     long 0
-LockIDCB      long 0
-
-           
-pDigInCB      long 0
-pDigOutCB     long 0
-pDigDirCB     long 0    
-
-tmp1          long 0 
-tmp2          long 0
-tmp3          long 0
-tmp4          long 0
-tmp5          long 0
-exit          long 0
-retv          long 0
-
-' PWM vars
-               
-maxDuty long  0
-maxT    long  0
-minOn   long  4
-minOff  long  11 
-OnTime  long  0
-OffTime long  0
-Times   long  0  

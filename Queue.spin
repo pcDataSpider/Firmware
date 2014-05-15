@@ -105,7 +105,14 @@ pub inc(val)
   'rollover
   if val=>Size
     val:=0
-  return val     
+  return val
+pub dec(val)
+{{ decrements a pointer in this buffer, accounting for rollover}}
+   val--   
+  'rollover
+  if val==0
+    val:=Size
+  return val      
 pub isFull : tmp  
   if Head==Tail and Full
     return 1

@@ -39,7 +39,7 @@ pub start(Data1, Data2, PwmPeriod)
 
 Init(Data1, Data2)    
 pwm.setPeriod( PwmPeriod )
-wavCog := cognew(@WavEntry,0)
+wavCog := cognew(@WavEntry,0)+1
 return wavCog
 
 pub Stop

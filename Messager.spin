@@ -14,11 +14,16 @@ con
   BUFDUMP = 0
   MSG_SIZE = 20
   MAX_MSG = 30                             '<XXX................>
-                                           '<XXXp:19,#0000,#0000>
+
+             
+                                          '<XXXp:19,#0000,#0000>
                       
   TIMEOUT = 80000000
   'TIMEOUT = 800000
   '<!zd:XX,#zzzz>
+  
+  EOP = 124
+  ESC = 96     
 obj                               
 '  Com   :       "FullDuplexSerial"     
   Com   :       "FullDuplexSerial_rr004" 
@@ -33,16 +38,11 @@ obj
 
 dat 'global shared data                                    
 
- 
-   somevar    long 0
+                    
  
    Locked     long 0
-   NameAddr   long 0 
-   NameSize   long 0
-   NameNum    long 0
-   NameIdx    long 0
-   ValAddr    long 0 
-   ValSize    long 0
+   LastPkt    long 0 
+   NameNum    long 0 
    ValNum     long 0  
    RetData    long 0
    ExData     long 0[EX_DAT_LEN]
@@ -53,22 +53,15 @@ dat 'global shared data
    LockID     byte 0
    ComCog     byte 0            
    Buffer     byte 0[MAX_BUFFER]
+   PacketBuffer byte 0[MAX_MSG]
    SendBuffer byte 0[MAX_MSG] 
-   CallBack   long 0    
-   NameTable  long 0   
-   NameCount  long 0
+
 
    Tout       long 0 'next timeout for repeating messages
    ToutTaken  long 0 'cnt when Tout was taken, used for clk overflow
    WaitingInfo long 0[MAX_WAITING * WAITING_SIZE] ' buffer for waiting repeating message info
    WaitingBuf byte 0[MAX_WAITING * MSG_SIZE] ' buffer used to store repeating messages
    eIDBuf     long 0[128]  
-
-dat  ' predefined strings. 
-              '  size,string
-   NotFound   byte 8,"NotFound"
-
-
 
 pub main         
 
@@ -83,13 +76,11 @@ pub main
   repeat
     Com.str(String (" BadDownload "))
 
-pub Start(callbackaddr, nametableaddr, nkeys)
-  Callback:=callbackaddr
-  NameTable:=nametableaddr
-  NameCount:=nkeys
-              
-  Q.init(@Buffer,MAX_BUFFER)  
-  ExecCB.Init           
+pub Start
+ 
+  Q.init(@Buffer,MAX_BUFFER)
+  Q.insert(EOP)
+  Q.insert(" ")     
        
   ComCog:=Com.Start(31,30,%0000,BAUD)       
   if  ComCog== 0
@@ -104,8 +95,10 @@ pub Start(callbackaddr, nametableaddr, nkeys)
       Com.str(String ("MCOG:"))
       Com.dec(ComCog)  
       Com.str(String ("BADLOCK:"))
-    return 0  
-                                
+    return 0
+    
+  ExecCB.Init   
+                                       
   return ComCog
 pub Stop
   Com.Stop 
@@ -119,6 +112,21 @@ lock
 repeat Q.getSize
   Com.tx(Q.peek(n++))
 clear
+pub echoQesc | n
+n:=Q.getHead
+lock
+repeat Q.getSize
+  if Q.peek(n) == ESC or Q.peek(n) == EOP
+    Com.tx(ESC)
+  Com.tx(Q.peek(n++))
+clear
+pub echoTmp | n
+n:=Tmp.getHead
+lock
+repeat Tmp.getSize
+  Com.tx(Tmp.peek(n))
+  n:=Tmp.inc(n)
+clear
 pub echoname | n
 n:=Name.getHead
 lock
@@ -131,250 +139,220 @@ lock
 repeat Val.getSize
   Com.tx(Val.peek(n++))
 clear
-pri storeVal | v, digit, num
-  if DEBUG 
-    Com.str(String("<store:" ))
-    echoVal
-    Com.tx(">")
-  if Val.getSize == 0  ' val is empty..  
-    return ' nothing to do. this is not a value.
-  else          
 
-    if Val.peekNext == ","      'get rid of leading comma before storing.
-      Val.get
-    v:=0
-    num:=0
-    case Val.peekNext
-      "#":
-        Val.get                 ' throw away the #      
-        repeat 4
-          v<<=8
-          v+=Val.get
-        exData[valNum]:=v
-          
-      "'":
-        Val.get                 ' throw away the open quote. use close quote as string terminator 
-        exData[valNum]:=ValAddr 
-      other:
-      
-        ValAddr:=Val.getAddr + Val.getHead 'start of Val. 
-        repeat until Val.isEmpty  
-          digit:=Val.get - 48          ' get digit in numeric form
-          if digit<0 or digit>9    ' if digit is not a number, store this addr, and move to next val
-            num:=1
-            quit
-          else  
-            v*=10              'otherwise its a number...
-            v+=digit
-        if num == 0
-          exData[valNum]:=v
-        else
-          exData[valNum]:=ValAddr  
-    valNum++
-    ' empty Val
-    repeat until Val.isEmpty
-      Val.get
-
-
-
-pub Parse | beg,end,numChars,c,state, exec,  m, n
+pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
 {{ Parses the buffer for keys. }}
 ' state determines what we are looking for next.
-' 0 : looking for open paren
-' 1 : looking for name. ends with : or >
-' 2 : looking for val. .... unknown what yet. lots of cases..
-' 3 : extract a number.     
-' 4 : extract a string.
-' 5 : extract a digest.
+
+
   if  Q.isEmpty               
     return 0
   end:=0
-  Tmp2.initWithData(@Buffer,MAX_BUFFER,Q.getHead, Q.getTail, 1, 1) 
- { repeat until end == -1
-    repeat until Tmp2.isEmpty
-      tmp2.get
-    end:=-1
-  }                            
+                        
   repeat until end==-1
+    ' match a key. 
+     '0 searching for EOP of last packet
+     '1 gather checksum      
+     '2 gather packet data
 
-   ' match a key. 
-    m:=1       
+     
+    lastc:=0
+    sum:=0  
     beg:=0
     end:=0
     state:=0
-    ValNum:=0
-     
-    repeat while end==0
+    escaped:=0
+    
+    Tmp2.initWithData(@Buffer,MAX_BUFFER,Q.getHead, Q.getTail, 1, 1) 
+    Tmp.init(@PacketBuffer,MAX_MSG)
+                      
+    repeat
     
       if Tmp2.isEmpty
         end:=-1                              
-        quit            
+        quit
+                       
       c:=Tmp2.get
       case state
-        0:
-          if c=="<"       
-            state:=1  
-            NumChars:=0 
-            beg:=Tmp2.getHead
-            Name.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)
-        1:
-          if c==":"
-            'sum+= c*m++     
-            state:=2
-            Val.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)
-          
-          elseif c==">" 
-            end:=Tmp2.getHead
-          elseif c=="<"    
-            state:=1   
-            NumChars:=0 
-            beg:=Tmp2.getHead
-            Name.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)
-            Val.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)
-          else 
-            'sum+= c*m++
-            name.insert(c)   
-        2:    
-          if c==">"                            
-            storeVal 
-            end:=Tmp2.getHead
-          elseif c=="<"   
+        0: 'searching for start of packet (end of last packet)
+          if not escaped and c==EOP
             state:=1
-            beg:=Tmp2.getHead
-            Name.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)
-            Val.initWithData(@Buffer, MAX_BUFFER, Tmp2.getHead, Tmp2.getHead, 0, 1)  
-          elseif c=="#" 
-            'sum+= c*m++  
+          else
+            Com.tx("!")
+            Com.tx("!")
+            Com.tx("!")
+            Com.tx(EOP)
+            Com.tx(0)
+            'Com.tx("(")
+        1: 'previous packet chksum   
+          state:=2             
+          beg:=Tmp2.getHead  
+          'Com.tx("#")
+        2: 'collect packet data
+          if not escaped and c==EOP 
+            'Com.tx(")")        
             state:=3
-            numchars:=0   
-          elseif c=="'" 
-            'sum+= c*m++  
-            state:=4 
-          elseif c==","
-            'sum+= c*m++   
-            storeVal
-          else 
-            'sum+= c*m++       
-          val.insert(c)         ' always insert into val. 
-        3:         
-          'sum+= c*m++  
-          numChars++  
-          if numChars==4
-            state:=2     
-          val.insert(c)
-        4: 
-          'sum+= c*m++            
-          if c=="'"
-            state:=2  
-          val.insert(c)
-
-                 
-     
-                                        
-    if end==-1                            
+          elseif escaped or (c<>ESC and c<>EOP)
+              Tmp.insert(c)
+              'Com.tx(c)
+            sum:=checksum(sum,c)
+            'sum<-=1
+            'sum+=c
+        3: 'character after EOP is chksum  
+          end:=Tmp2.dec(Tmp2.dec(Tmp2.getHead))
+          chk:=c         
+          quit             
+            
+      if c==ESC and not escaped
+        escaped:=1
+      else
+        escaped:=0
+      lastc:=c
+                  
+    if end==-1                     
       quit ' no more keys!!                
-                
-    ' parse key.              
-    Tmp.initWithData(@Buffer,MAX_BUFFER,beg,end, 1, 1)  
-    execCallback   
+    ' test checksum  
+    if sum <> chk
+      ExData[0]:=sum
+      ExData[1]:=chk
+      sendControl(2,@ExData, 2)
+    else               
+      ' parse key.                  
+      if Tmp.peekNext & %10000000
+        'stream packet  (PropDAQ does not understand stream packets. this msg is a mistake.
+        parseStream    
+      else
+        'control packet
+        parseControl
+        r:=ExecCB.exec(NameNum, @ExData, ValNum)
+        if not (r & 1<<31)   
+          sendControl( r, @ExData+4, ExData[0] )
           
     if BUFDUMP>0    
       Com.str(String("<dump:'"))   
     repeat Q.getDist(Q.getHead,end)  'flush out things from Q. 
       if BUFDUMP > 0
-        Com.tx(Q.get)
+        c := Q.get
+        if c == EOP or c == ESC
+          Com.tx(ESC)
+        Com.tx(c)     
       else
         Q.get
        
     if BUFDUMP>0   
       Com.str(String("'>"))
+      Com.tx(EOP)
+
+pri parseStream | n 
+  Com.str(String("Can't Read Stream Packets!"))
+  NameNum:=-1 'indicates error with control packets
+  return
+pri parseControl | n, c, state, curVal
+  {{ Parses the Tmp buffer for control packets. fills nameNum, exData, and valNum}}
+    ' match a key. 
+     '0 gets msg ID
+     '1 gets packet #   
+     '2 reads in msd parameters
 
 
-pub sendKey(keyname,NameLen,Vals,ValsLen, flags) | n, m, i, x, sum2, eID2, type, cval, r
-  {{
-  keyname - Byte array for name
-  NameLen - length of keyname
-  Vals - array of longs, packed as ...type,val,type,val,type,val...
-  ValsLen - number of packed values, len(Vals/2) 
-  flags - 0Bit set for echo, Bit1 set for extra value types, Bit2 set for ack, bit3 set for a msgID of 0 }}
-               
-  n:=0  
-    
-  bytemove( @sendBuffer+n, keyname, NameLen)
-  n+=NameLen  
+    curVal:=0 
+    state:=0
+    ValNum:=0
+    NameNum:=-1
+    n:=0
+           
+      if Tmp.isEmpty
+        NameNum:=-1                 
+        Com.str(String("Bad Control Msg!|"))                            
+        return
+    repeat   
+      if Tmp.isEmpty
+        quit
+                       
+      c:=Tmp.get
+      case state
+        0: 'first byte: the message ID#
+          NameNum:=c
+          state:=1
+          
+        1: 'second byte: packet #
+          LastPkt:=c  
+          state:=2
+        2: 'collect packet data
+          curVal <<= 8
+          curVal += c
+          n++
+          if n==4
+            exData[valNum]:=curVal
+            curVal:=0
+            n:=0
+            valNum++
+  return
+pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
+{{ sends a control packet with nameID, and a long arrary of params, of length paramLen
+    nameID - Control Message ID
+    params - Long array of message parameters
+    paramLen - number of longs in params}}
 
-  if ValsLen > 0  
-    sendBuffer[n++] := ":"
-
-  m:=0
-  repeat ValsLen
-  
-    if flags & %10       
-      type:=Long[Vals+m] 
-      m:=m+4
-    else                                       ' 1000
-      type:=1                                  ' #_ _ _ _
-    cval:=Long[Vals+m]
-    m:=m+4    
-      
-    if type == 1  
-      if cval<10000 and cval>-10000
-          '' Print a decimal number 
-        x := cval == NEGX                                                            'Check for max negative
-        if cval < 0
-          cval := ||(cval+x)                                                        'If negative, make positive; adjust for max negative
-          sendBuffer[n++] := ("-")                                                                     'and output sign
-        i := 1000                                                            'Initialize divisor
-
-        r~ 
-        repeat 4                                                                     'Loop for 4 digits
-          if cval => i                                                               
-            sendBuffer[n++] := (cval / i + "0" + x*(i == 1)) & $FF                     'If non-zero digit, output digit; adjust for max negative
-            cval //= i                                                                 'and digit from value
-            r~~                                                                  'flag non-zero found
-          elseif r or i == 1
-            sendBuffer[n++] := ("0")                                                                   'If zero digit (or only digit) output it
-          i /= 10   
-
-      else  
-        sendBuffer[n++]:="#"
-        sendBuffer[n++]:=((cval&$FF000000)>>24)   
-        sendBuffer[n++]:=((cval&$00FF0000)>>16)   
-        sendBuffer[n++]:=((cval&$0000FF00)>>8)   
-        sendBuffer[n++]:=((cval&$000000FF)>>0) 
-    if type == 2
-      ' string type           
-      sendBuffer[n++]:="'"
-      i:=0
-      repeat
-        if byte[cval+i] == 0
-          quit
-        else
-          sendBuffer[n++]:=byte[cval+i++] 
-      sendBuffer[n++]:="'" 
-    if (flags & %10 and m/8 <> ValsLen) or (!(flags & %10) and m/4 <> ValsLen)                                   
-      sendBuffer[n++]:=","                               
-
-
-
-  send(@sendBuffer, n)
-                                       
-                             
-
-pri send( msg, len) | n, m
-         
+  'com.tx("%")
+  'com.dec(nameID)
+  'com.tx("#")
+  'com.dec(paramLen)
+  'n:=0
+  'repeat paramlen
+  '  com.tx(".")
+  '  com.dec(long[params+n*4])
   n:=0
-  lock 
-  com.tx("<")
-  repeat len
-    com.tx( byte[msg+n] ) 
-    if WaitingMsg.isFull
-      WaitingMsg.get
-    WaitingMsg.insert( byte[msg+n++] )  
+  chkSum:=0
+  'sendBuffer[n++] := 0 ' placeholder for checksum
+  if nameID == EOP ' make sure not to transmit the EOP within the packet
+    sendBuffer[n++] := ESC 
+    chkSum := checksum(chksum,ESC)
+  sendBuffer[n++] := nameID  
+  chkSum := checksum(chksum,nameID)
+  pID:=nextID
+  if PID == EOP ' make sure not to transmit the EOP within the packet
+    sendBuffer[n++] := ESC 
+    chkSum := checksum(chksum,ESC)
+  sendBuffer[n++] := pID
+  chkSum := checksum(chksum,PID)
+ ' bytemove( @sendBuffer+n, params, paramLen*4 )
 
-  com.tx(">")    
+  m:=0 ' move the long aray, params, into a byte array. (this involves inverting the byte order of each long)
+  i:=0
+  repeat paramLen
+    v := long[params+(m)]
+    m+=4
+    i:=8
+    repeat 4             
+      bytev := (v >> (32 - i))&$FF
+      i+=8   
+      if bytev == EOP or bytev == ESC ' make sure not to transmit the EOP within data
+        sendBuffer[n++] := ESC 
+        chkSum := checksum(chksum,ESC)
+      sendBuffer[n++] := bytev 
+      chkSum:= checksum(chksum,bytev)                        
+   
+ 
+  sendBuffer[n++] := EOP 
+  sendBuffer[n++] := chkSum
+
+          
+  lock
+  m:=0
+  repeat n
+    com.tx(sendBuffer[m++])  
   clear
-        
+pub checksum(chksum, value)
+  return  ((((chksum<<1) | (chksum>>7)) & 255) + value) & 255
+pub txEOP
+  Com.tx(EOP)
+pub txESC
+  Com.tx(ESC)
+pub txData(c) 'sends a character over serial port, avoiding EOP and ESC characters
+  if c == EOP or c == ESC
+    Com.tx(ESC)
+  Com.tx(c)
 pub char( c )  ' sends a char over the serial port 
   Com.tx(c)  
 pub str( s ) 
@@ -397,101 +375,9 @@ pub clear
   lockClr(LockID)
 pub nextID
   newID:=(newID+1) & $FF
-  repeat while newID==0
+  if newID==0
     newID:=(newID+1) & $FF 
   return (newID)
-pri hashName     : n | TableIdx, Pos
-n := 0     
-Pos:=Name.getHead      
-TableIdx := NameTable
-
-if Name.isEmpty
-  return 0                                
-      
-repeat NameCount                        
-  n++   
-
-  repeat
-    ' skip echo symbols
-    'if Name.peek( Pos ) == "@" or Name.peek( Pos ) == "!"
-    '  Pos:=Name.inc(Pos)
-    '  Pos:=Name.inc(Pos)
-    '  next        
-    ' ceck if this is the key 
-    if Byte[TableIdx] <> Name.peek( Pos )
-      quit
-
-    ' test for end of buffer
-    if Name.inc(Pos) == Name.getTail or name.peek( Name.inc(Pos) )=="|"  
-      if Byte[TableIdx+1] == 0  ' test for end of entry  
-        return    ' MATCH!
-      else                                       
-        quit      ' no match.
-     
-    TableIdx++
-    Pos:=Name.inc(Pos) 
-  ' Key does not match, check next entry...        
-  repeat until Byte[TableIdx++] == 0
-  Pos:=Name.getHead
-           
-n:=0 
-pri execCallback : COG |digit,number,n,dbg
-{{ Executes the callback function. blocks until callback is complete.}}
-                  
-'setup data before call.     
-NameAddr:=Name.getAddr+(Name.getHead)
-NameSize:=Name.getSize    
-ValAddr:=Val.getAddr  ' case when val is not a number, and is not empty
-ValSize:=Val.getSize  ' size of the ValAddr string, 0 if all numbers.        
-Locked~
-COG~                      
-' convert from string to int.
-' number represents index into nametable key was found, starting at 1
-NameNum:=hashName
-'NameIdx:=getNameIdx ' returns the index in numeric form ( <...|IDX:...> )
-  RetData := ExecCB.exec(NameAddr, NameSize, NameNum, @ExData, ValNum)
-   
-  if RetData <> 0  
-    if RetData <> -1 
-      SendKey(Name.getAddr+Name.getHead,Name.getSize, @ExData, RetData, 4)
-    return
-                                                    '          ID
-                                                     
-  if NameNum == 0                                    '   <- <XX ì!   start>
-    Locked:=0                                        '   -> <XX j@ì  start:32>                                
-    RetData:=0  
-  else  
-    NameNum--
-    repeat
-      COG:= cognew(callback, @Locked)+1
-    until COG
-    if DEBUG
-      SendKey(String("execval"), 7, @ExData, 4, 0)                  
-    repeat until Locked
-
-     
-  if Locked==0 
-    SendKey(String("NotFound"),8, @ExData, 0, 1)                                    
-  elseif Locked==1  ' normal     
-    if ValNum==0     
-      ExData[0]:=RetData
-      SendKey(Name.getAddr+Name.getHead,Name.getSize, @ExData, 1, 0)
-  elseif Locked==2  ' send retData  
-      ExData[0]:=RetData
-      SendKey(Name.getAddr+Name.getHead,Name.getSize, @ExData, 1, 0) 
-  elseif Locked==3 
-    SendKey(Name.getAddr+Name.getHead,Name.getSize, @ExData, RetData, 4)
-  else                    
-    Com.str(String("<?>"))
-                                    
-    
-    
-  if DEBUG  
-    Com.str(String("<Ret:"))  
-    Com.dec(RetData)   
-    Com.tx(",")         
-    Com.dec(Locked)  
-    Com.tx(">")       
 
 pri Read | c, bytrd
 {{ reads in all characters in the rx buffer }}  
@@ -501,7 +387,7 @@ pri Read | c, bytrd
     if Q.isFull==1
       ExData[0]:=Q.gethead
       ExData[1]:=Q.getTail
-      sendKey(String("Full"), 4, @ExData, 2, 1)
+      com.str(String("!full!|"))
       c:=-1 ' Full. done with loop. 
     else ' otherwise, read in next char.  
       c:=Com.rxcheck
@@ -514,8 +400,11 @@ pri Read | c, bytrd
     if BUFDUMP > 0
       lock  
       Com.str( String("<buffer:'") )
-      echoQ  
+      clear
+      echoQesc
+      lock
       Com.str( String("'>") )
+      Com.tx(EOP)
       clear  
 
   return bytrd                         
