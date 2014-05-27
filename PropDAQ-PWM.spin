@@ -19,10 +19,10 @@ Con
   ERR           = 200  ' largest possible variance in tstamp of ADC data, and ideal sample rate, in clock cycles.
   btnMask       = %10000000
 
-  DPIN1 = 24
-  DPIN2 = 25
-  DPIN3 = 26
-  DPIN4 = 27        
+  DPIN1 = 16
+  DPIN2 = 17
+  DPIN3 = 18
+  DPIN4 = 19        
 obj
   Msg       : "Messager"
   ExecCB    : "MessageHandler"
@@ -32,8 +32,8 @@ obj
  ' Streams   : "StreamData"  
 
 var              
-  long Stack[400] 
-  long Stack2[400]  
+  long Stack[800] 
+  long Stack2[800]  
   byte RDCOG   
   byte ADCCOG  
   byte DIGCOG
@@ -48,9 +48,10 @@ dat     ' channel related data
         ' these values define different channels
         Change          long 0                          ' bitmask for ADC channels whose parameters have changed. 1=change 0=no change
         Channels        long %0000000000                ' bitmask for active channels. 1=on 0=off  
-        Rates           long 80000[nAnalogI]          ' sample rates for channels in clocks per sample
-        chanFreqs       long 0
-        nAvg            long INITAVG                         ' number of ADC reads to average for one sample
+        Rates           long 80000[nAnalogI]            ' sample rates for channels in clocks per sample
+        chanFreqs       long 0                          ' Bitmask for each ADC channel mode (high/low freq)
+        clearBuffer     long 0                          ' bitmask for ADC channels that need to clear their buffer.  
+        nAvg            long INITAVG                    ' number of ADC reads to average for one sample
    
         ' ADC buffer and buffer data
         ADCBuffers      long 0[nAnalogI*ADCBUFFERLEN*2] ' time stamp of the last value read
@@ -119,7 +120,7 @@ pub Main | n, i
 
 
                                        
-  ExecCB.InitData(nAnalogI, nAnalogO, @nAvg, @pwmData, @pwmExec, 1015, @Change, @Channels, @Rates, @DigOut, @DigDir, @ChanFreqs)        
+  ExecCB.InitData(nAnalogI, nAnalogO, @nAvg, @pwmData, @pwmExec, 1015, @Change, @Channels, @Rates, @DigOut, @DigDir, @ChanFreqs, @clearBuffer)        
   'Streams.Init                                        
 
   MSGCOG:=Msg.start
@@ -143,14 +144,13 @@ pub Main | n, i
   lastSync:=cnt
   nextSync:=lastSync+syncDelay
                            
-  pwm1.start( %0111, 1015) 
-  pwm1.changePwmAsm(000) 
-  pwm2.start( %1000, 1015)
-  pwm2.changePwmAsm(000)
-  DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
+'  pwm1.start( %0111, 1015) 
+'  pwm1.changePwmAsm(000) 
+'  pwm2.start( %1000, 1015)
+'  pwm2.changePwmAsm(000)
+  'DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
   RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
   DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      
-            
   'Msg.dec(DIGCOG)
   'Msg.char("|")
   'Msg.dec(RDCOG)
@@ -162,9 +162,10 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
   ' wait until a cog is available to start the ADC.
 
     
- dira[DPin1]~~
- dira[DPin2]~~
- dira[DPin3]~~
+  dira[DPin1]~~
+  dira[DPin2]~~
+  dira[DPin3]~~
+  dira[DPin4]~~
 
      ' start ADC 
   repeat  until ADCCOG > 0 
@@ -179,159 +180,143 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
   repeat
     ch := 0
     repeat nAnalogI       
-      TogglePin(DPIN1)
       'read in as much data as possible from this channel
       curRate:=streamRate[ch] 
       lastTime:=lastTstamp[ch]
       beg:=curADCIdx[ch]
+        
       i:=beg
       valCount:=0
-      chk:=9999 'chk should be reset to the return value of openStream(ch)
-                                                                 
+      chk:=9999 'chk should be reset when a new packet starts                         
+      if clearBuffer&(1<<ch)<>0
+        repeat while ADCBuffers[ i+1 ] <> 0
+          valCount+=1          
+          ' move to the next long
+          lastTime:=time          
+          i+=2                   
+          if i => (ch+1) * ADCBUFFERLEN*2             
+            i:= ch * ADCBUFFERLEN*2   
+            longfill( @ADCBuffers + (beg*4), 0, valCount*2)
+            beg:=i
+            valCount:=0 
+            
+        longfill( @ADCBuffers + (beg*4), 0, valCount*2) 
+        clearBuffer&=(!(1<<ch))
         
-      repeat while ADCBuffers[ i+1 ] <> 0 
-        'TogglePin(DPIN2)           
-        'TogglePin(DPIN3)
-        val:=ADCBuffers[ i ]
-        AvgCnt:=val>>25
-        val:=(val&$00FFFFFF) / AvgCnt  
-        time:= ADCBuffers[ i + 1 ]
-        if not ChanFreqs & (1<<ch)
-          'LowFreq mode..
-          SendPoint(time, val | (ch<<12) )
-        '  TogglePin(DPIN3)
-        '  TogglePin(DPIN3)
-        '  TogglePin(DPIN3)
-        else             
-          'ADCBuffers[ i + 1 ]:=0
-          'ADCBuffers[ i ]:=0                    78
-          
-      
-                          
-          'if (time-lastTime>(curRate+ERR) or time-lastTime<(curRate-ERR) or Streams.byteLeft(ch)=<4) and not Streams.isEmpty(ch) 
-          '  'time to send. Either buffer is full, or reached a non-consecutive value
-          '  longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in.  
-          '  sendStream(ch)
-          '  beg:=i
-          '  valCount:=0               
-                       
-        '  TogglePin(DPIN3)
-          ' test if this is the first byte in the stream.
-          if !isStreamOpen(ch)   
-            streamRate[ch]:= Rates[ch]*nAvg
-            curRate:=streamRate[ch] 
-            bitsLeft:=openStream(ch)
-            chk:=0
-            lastTime:=time-curRate 'reset lastTime
-
-            'transmit data  ( add curRate and time to stream. both 32bit values.
-
-            sendData:=curRate
-            repeat 2
-              N:=32
-              repeat until N<8
-                if bitsLeft 
-                  N:=N-4
-                  tmpByte:= bitsLeft | sendData>>N
-                  Msg.txData(tmpByte)  
-                  chk:=checksum(chk,tmpByte) 
-                  bitsLeft:=0  
-                else
-                  N:=N-8
-                  tmpByte:=sendData>>N   
-                  Msg.txData(tmpByte)  
-                  chk:=checksum(chk,tmpByte)
-              bitsLeft:=((sendData&15)<<4)|%1000000000   
-              sendData:=time  
-              
-            beg:=i
-            valCount:=0
-
-          ' test for non consecutive values
-          tmpByte:=time-lastTime
-          if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
-            longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in.  
-            closeStream(ch,chk,bitsLeft)
-            beg:=i
-            valCount:=0  
-            next ' just bail.  
-
-        '  TogglePin(DPIN3)
-          'add this value and move on.
-          if bitsLeft
-            tmp:= bitsLeft | val>>8
-            Msg.txData(tmp)  
-            chk:=checksum(chk,tmp)
-            Msg.txData(val)    
-            chk:=checksum(chk,val)
-            bitsLeft:=0
+      repeat while ADCBuffers[ i+1 ] <> 0
+          val:=ADCBuffers[ i ]
+          AvgCnt:=val>>25
+          val:=(val&$00FFFFFF) / AvgCnt  
+          time:= ADCBuffers[ i + 1 ]
+  
+          if not ChanFreqs & (1<<ch)
+            'LowFreq mode..
+            'make sure no streams are open
+            CloseStream(curstream+1,0,0)
+            SendPoint(time, val | (ch<<12) )
           else
-            tmp:=val>>4    
-            Msg.txData(tmp)  
-            chk:=checksum(chk,tmp)
-            bitsLeft:=((val)<<4)|%100000000   
-        '  TogglePin(DPIN3)
-        valCount+=1          
-        ' move to the next long
-        lastTime:=time          
-        i+=2
-                      
-       ' TogglePin(DPIN2)     
-        if i => (ch+1) * ADCBUFFERLEN*2             
-          i:= ch * ADCBUFFERLEN*2   
-          quit 'give up time to OTHER channels  
+            'if (time-lastTime>(curRate+ERR) or time-lastTime<(curRate-ERR) or Streams.byteLeft(ch)=<4) and not Streams.isEmpty(ch) 
+            '  'time to send. Either buffer is full, or reached a non-consecutive value
+            '  longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in.  
+            '  sendStream(ch)
+            '  beg:=i
+            '  valCount:=0               
+                       
+            ' test if this is the first byte in the stream.
+            if !isStreamOpen(ch)   
+              streamRate[ch]:= Rates[ch]*nAvg
+              curRate:=streamRate[ch] 
+              bitsLeft:=openStream(ch)
+              chk:=0
+              lastTime:=time-curRate 'reset lastTime
+
+              'transmit data  ( add curRate and time to stream. both 32bit values.
+              sendData:=curRate
+              repeat 2
+                N:=32
+                repeat until N<8
+                  if bitsLeft 
+                    N:=N-4 'only work in increments of 4 bits to make things simpler 
+                    tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
+                    Msg.txData(tmpByte)  
+                    chk:=Msg.checksum(chk,tmpByte) 
+                    bitsLeft:=0  
+                  else
+                    N:=N-8 'send a whole byte
+                    tmpByte:=sendData>>N   
+                    Msg.txData(tmpByte)  
+                    chk:=Msg.checksum(chk,tmpByte)
+                if N>0       'add the last 4 bits
+                  bitsLeft:=((sendData&15)<<4)|%1000000000 'add higher bits to signify it has data   
+                sendData:=time  
+              
+              beg:=i 'rest beginning to point here
+              valCount:=0 'no data yet. 
+            ' test for non consecutive values
+            tmpByte:=time-lastTime
+            if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
+              longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in. 
+              closeStream(ch,chk,bitsLeft)
+              beg:=i
+              valCount:=0  
+              next ' just bail out of this loop iteration
+
+            'add this value and move on.
+            if bitsLeft 'if there are bits already, read in 4 bits, send, then read the rest
+              tmp:= bitsLeft | val>>8 'send 4 MSB's (12-4=8)
+              Msg.txData(tmp)  
+              chk:=Msg.checksum(chk,tmp)
+              Msg.txData(val)         'send 8 LSB's
+              chk:=Msg.checksum(chk,val)
+              bitsLeft:=0
+            else
+              tmp:=val>>4             'send 8 MSB's (12-8=4)
+              Msg.txData(tmp)  
+              chk:=Msg.checksum(chk,tmp)
+              bitsLeft:=((val)<<4)|%100000000  'add 4 LSB's to bitsLeft, with added higher order bits  
+          valCount+=1          
+          ' move to the next long
+          lastTime:=time          
+          i+=2                   
+          if i => (ch+1) * ADCBUFFERLEN*2             
+            i:= ch * ADCBUFFERLEN*2   
+            quit 'give up time to OTHER channels when the buffer loops around.  
+                          
+
       longfill( @ADCBuffers + (beg*4), 0, valCount*2) 
       curADCIdx[ch]:=i
       lastTstamp[ch]:=lastTime
-      ' test if channel is active. If not, send any remaining data.
-      'TogglePin(DPIN4)
       'close stream if it is currently open.
-      if isStreamOpen(ch)
-        closeStream(ch,chk,bitsLeft)
-      'if not ((1<<ch) & Channels) and not Streams.isEmpty(ch)
-      '  sendStream(ch)                                       
+      closeStream(ch,chk,bitsLeft)
       ch++
-      'TogglePin(DPIN4)
-
+      
                 
-pri checksum(chksum, value)
-  return  ((((chksum<<1) | (chksum>>7)) & 255) + value) & 255
 pri openStream(ch):chk | blah
 if curStream
-  closeStream(curStream+1,0,0) 'close a bad stream. log an error.
+  closeStream(curStream-1,0,0) 'close a bad stream. log an error or something
   ExData[0]:=9999  
+  Msg.debugmsg(String("Closing bad stream?"))
   Msg.sendControl(1,@ExData,1)
 curStream:=ch+1
-Msg.lock                                  'meatloaf
-return (%1000 | ch)<<4 
+
+Msg.arstD    'take lock for the duration that this stream is open. (will close at the end of a stream packet)
+return (%1000 | ch)<<4 'return the first byte of the stream packet.
+
 pri closeStream(ch,chk,bitsLeft) | blah
+if curStream<>ch+1 'only close if already open. otherwise we could clear a lock we didnt take.
+  return
 if bitsLeft
-  Msg.char(bitsLeft)
+  Msg.txData(bitsLeft)
 Msg.txEOP
-Msg.char(chk)
-Msg.clear
+Msg.char(chk) 
+Msg.zxcvD
 curStream:=0
 return
 pri isStreamOpen(ch)
-  if curStream==ch+1
-    return true
-  else
-    return false     
-
-'pub sendStream(i) | addr, len
-'  len:=Streams.getLen(i)
-'  addr:=Streams.getAddr(i)
-'  Msg.lock            
-'  if len=<1  
-'    Msg.clear 
-'    Streams.reset(i)   
-'  else                                  
-'    repeat len
-'      Msg.char(byte[addr++])
-'    Msg.txEOP  
-'    Msg.clear
-'    Streams.reset(i) 
-       
+if curStream == ch+1
+  return true
+else
+  return false
 pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, duty, inc
 
 
@@ -351,19 +336,7 @@ pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, 
     if curVal                                                       
       sendDig(cnt,curVal&$7FFFFFFF)
 
-    ' test debug values
-    if dbg1 <> 0
-      ExData[0]:=dbg1     
-      ExData[1]:=dbg2        
-      ExData[2]:=dbg3          
-      ExData[3]:=dbg4
-      ExData[4]:=999
-      Msg.SendControl(1,@ExData,5)
-      dbg1:=0
-      dbg2:=0
-      dbg3:=0
-      dbg4:=0
-
+    
 pub sendSync
   ExData[0]:=cnt
   if nextSync < lastSync

@@ -15,7 +15,11 @@ con
   MSG_SIZE = 20
   MAX_MSG = 30                             '<XXX................>
 
-             
+                         
+  DPIN1 = 16
+  DPIN2 = 17
+  DPIN3 = 18
+  DPIN4 = 19
                                           '<XXXp:19,#0000,#0000>
                       
   TIMEOUT = 80000000
@@ -50,7 +54,7 @@ dat 'global shared data
 
    newID         long 0
    
-   LockID     byte 0
+   qwfp     byte 0
    ComCog     byte 0            
    Buffer     byte 0[MAX_BUFFER]
    PacketBuffer byte 0[MAX_MSG]
@@ -89,8 +93,8 @@ pub Start
       Com.dec(ComCog)
     return 0
            
-  LockID:=LockNew
-  if LockID==-1
+  qwfp:=LockNew
+  if qwfp==-1
     repeat                  
       Com.str(String ("MCOG:"))
       Com.dec(ComCog)  
@@ -105,41 +109,6 @@ pub Stop
 pub checkKeys
     if Read > 0 '(reads in the RxBuffer from Ser. Com)
       Parse ' parses the buffer for keys.
-
-pub echoQ | n
-n:=Q.getHead
-lock
-repeat Q.getSize
-  Com.tx(Q.peek(n++))
-clear
-pub echoQesc | n
-n:=Q.getHead
-lock
-repeat Q.getSize
-  if Q.peek(n) == ESC or Q.peek(n) == EOP
-    Com.tx(ESC)
-  Com.tx(Q.peek(n++))
-clear
-pub echoTmp | n
-n:=Tmp.getHead
-lock
-repeat Tmp.getSize
-  Com.tx(Tmp.peek(n))
-  n:=Tmp.inc(n)
-clear
-pub echoname | n
-n:=Name.getHead
-lock
-repeat Name.getSize
-  Com.tx(Name.peek(n++))
-clear
-pub echoval | n
-n:=Val.getHead
-lock
-repeat Val.getSize
-  Com.tx(Val.peek(n++))
-clear
-
 pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
 {{ Parses the buffer for keys. }}
 ' state determines what we are looking for next.
@@ -151,9 +120,10 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
                         
   repeat until end==-1
     ' match a key. 
-     '0 searching for EOP of last packet
-     '1 gather checksum      
+     '0 searching for EOP of last packet. should always be the first byte.
+     '1 discard last checksum      
      '2 gather packet data
+     '3 gather checksum
 
      
     lastc:=0
@@ -177,13 +147,8 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
         0: 'searching for start of packet (end of last packet)
           if not escaped and c==EOP
             state:=1
-          else
-            Com.tx("!")
-            Com.tx("!")
-            Com.tx("!")
-            Com.tx(EOP)
-            Com.tx(0)
-            'Com.tx("(")
+          else 'first thing is not an EOP?? should not be.
+            debugmsg(String("Parse Error. no previous EOP"))
         1: 'previous packet chksum   
           state:=2             
           beg:=Tmp2.getHead  
@@ -225,26 +190,16 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
         'control packet
         parseControl
         r:=ExecCB.exec(NameNum, @ExData, ValNum)
-        if not (r & 1<<31)   
+        if not (r & 1<<31)
           sendControl( r, @ExData+4, ExData[0] )
           
-    if BUFDUMP>0    
-      Com.str(String("<dump:'"))   
+          
     repeat Q.getDist(Q.getHead,end)  'flush out things from Q. 
-      if BUFDUMP > 0
-        c := Q.get
-        if c == EOP or c == ESC
-          Com.tx(ESC)
-        Com.tx(c)     
-      else
-        Q.get
+      Q.get
        
-    if BUFDUMP>0   
-      Com.str(String("'>"))
-      Com.tx(EOP)
 
 pri parseStream | n 
-  Com.str(String("Can't Read Stream Packets!"))
+  debugmsg(String("Can't Read Stream Packets!"))
   NameNum:=-1 'indicates error with control packets
   return
 pri parseControl | n, c, state, curVal
@@ -263,7 +218,7 @@ pri parseControl | n, c, state, curVal
            
       if Tmp.isEmpty
         NameNum:=-1                 
-        Com.str(String("Bad Control Msg!|"))                            
+        debugmsg(String("Bad Control Msg!"))                            
         return
     repeat   
       if Tmp.isEmpty
@@ -294,16 +249,9 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
     params - Long array of message parameters
     paramLen - number of longs in params}}
 
-  'com.tx("%")
-  'com.dec(nameID)
-  'com.tx("#")
-  'com.dec(paramLen)
-  'n:=0
-  'repeat paramlen
-  '  com.tx(".")
-  '  com.dec(long[params+n*4])
   n:=0
   chkSum:=0
+          
   'sendBuffer[n++] := 0 ' placeholder for checksum
   if nameID == EOP ' make sure not to transmit the EOP within the packet
     sendBuffer[n++] := ESC 
@@ -317,7 +265,7 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
   sendBuffer[n++] := pID
   chkSum := checksum(chksum,PID)
  ' bytemove( @sendBuffer+n, params, paramLen*4 )
-
+  
   m:=0 ' move the long aray, params, into a byte array. (this involves inverting the byte order of each long)
   i:=0
   repeat paramLen
@@ -332,18 +280,19 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
         chkSum := checksum(chksum,ESC)
       sendBuffer[n++] := bytev 
       chkSum:= checksum(chksum,bytev)                        
-   
  
   sendBuffer[n++] := EOP 
-  sendBuffer[n++] := chkSum
-
-          
-  lock
+  sendBuffer[n++] := chkSum                 
+  debugmsg(String("$$$$$$$$$$$$$$ About to lock in sendControl")) 
+  
+  arst
   m:=0
   repeat n
     com.tx(sendBuffer[m++])  
-  clear
+  zxcv                       
+          
 pub checksum(chksum, value)
+  chksum:=chksum & 255 'ignore higher order bits
   return  ((((chksum<<1) | (chksum>>7)) & 255) + value) & 255
 pub txEOP
   Com.tx(EOP)
@@ -369,15 +318,30 @@ pub pause | c
   repeat
     c:=Com.rxcheck  
   until c<>-1  
-pub lock
-  repeat until not lockSet(LockID) 
-pub clear
-  lockClr(LockID)
+pub arst
+  dira[DPIN3]~~
+  dira[DPIN4]~~                          
+  debugmsg(String("############# Locking")) 
+  repeat until not lockSet(qwfp)
+    togglepin(DPIN3)
+    waitms(1000)           
+  outa[DPIN4]~~
+  waitms(1000)
+  debugmsg(String("~~~~~~~~~~~~~ Locked"))
+pub zxcv                  
+  lockClr(qwfp)
+  outa[DPIN4]~       
+  debugmsg(String("!!!!!!!!!!!!! Cleared"))
 pub nextID
   newID:=(newID+1) & $FF
   if newID==0
     newID:=(newID+1) & $FF 
   return (newID)
+
+pub debugmsg(msg) 'send a debug control message.
+com.str(msg)
+com.tx(EOP)
+com.tx("X")
 
 pri Read | c, bytrd
 {{ reads in all characters in the rx buffer }}  
@@ -386,8 +350,8 @@ pri Read | c, bytrd
   repeat   
     if Q.isFull==1
       ExData[0]:=Q.gethead
-      ExData[1]:=Q.getTail
-      com.str(String("!full!|"))
+      ExData[1]:=Q.getTail 
+      debugmsg(String("Full"))
       c:=-1 ' Full. done with loop. 
     else ' otherwise, read in next char.  
       c:=Com.rxcheck
@@ -396,17 +360,10 @@ pri Read | c, bytrd
         Q.insert(c)
         bytrd++   
   until c==-1
-  if  bytrd > 0 
-    if BUFDUMP > 0
-      lock  
-      Com.str( String("<buffer:'") )
-      clear
-      echoQesc
-      lock
-      Com.str( String("'>") )
-      Com.tx(EOP)
-      clear  
 
-  return bytrd                         
+  return bytrd
+pub TogglePin(Pin)
+ {{toggles the debugging pin to check with a scope/LED}} 
+ !outa[Pin]
 pub WaitMS(MS)                
   waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS        
