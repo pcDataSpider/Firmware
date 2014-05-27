@@ -160,12 +160,7 @@ pub Main | n, i
 
 pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,AvgCnt, addr, len, curRate, bitsLeft,chk
   ' wait until a cog is available to start the ADC.
-
     
-  dira[DPin1]~~
-  dira[DPin2]~~
-  dira[DPin3]~~
-  dira[DPin4]~~
 
      ' start ADC 
   repeat  until ADCCOG > 0 
@@ -299,7 +294,7 @@ if curStream
   Msg.sendControl(1,@ExData,1)
 curStream:=ch+1
 
-Msg.arstD    'take lock for the duration that this stream is open. (will close at the end of a stream packet)
+Msg.Lock    'take lock for the duration that this stream is open. (will close at the end of a stream packet)
 return (%1000 | ch)<<4 'return the first byte of the stream packet.
 
 pri closeStream(ch,chk,bitsLeft) | blah
@@ -309,7 +304,7 @@ if bitsLeft
   Msg.txData(bitsLeft)
 Msg.txEOP
 Msg.char(chk) 
-Msg.zxcvD
+Msg.Clear
 curStream:=0
 return
 pri isStreamOpen(ch)

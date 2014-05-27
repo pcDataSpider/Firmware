@@ -248,7 +248,7 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
     nameID - Control Message ID
     params - Long array of message parameters
     paramLen - number of longs in params}}
-
+                           
   n:=0
   chkSum:=0
           
@@ -283,13 +283,12 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
  
   sendBuffer[n++] := EOP 
   sendBuffer[n++] := chkSum                 
-  debugmsg(String("$$$$$$$$$$$$$$ About to lock in sendControl")) 
-  
-  arst
-  m:=0
+                          
+  Lock                     
+  m:=0           
   repeat n
-    com.tx(sendBuffer[m++])  
-  zxcv                       
+    com.tx(sendBuffer[m++])
+  Clear              
           
 pub checksum(chksum, value)
   chksum:=chksum & 255 'ignore higher order bits
@@ -318,20 +317,11 @@ pub pause | c
   repeat
     c:=Com.rxcheck  
   until c<>-1  
-pub arst
-  dira[DPIN3]~~
+pub Lock                    
   dira[DPIN4]~~                          
-  debugmsg(String("############# Locking")) 
   repeat until not lockSet(qwfp)
-    togglepin(DPIN3)
-    waitms(1000)           
-  outa[DPIN4]~~
-  waitms(1000)
-  debugmsg(String("~~~~~~~~~~~~~ Locked"))
-pub zxcv                  
+pub Clear                                 
   lockClr(qwfp)
-  outa[DPIN4]~       
-  debugmsg(String("!!!!!!!!!!!!! Cleared"))
 pub nextID
   newID:=(newID+1) & $FF
   if newID==0

@@ -35,6 +35,7 @@ dat
         pDigOut         long 0
         pDigDir         long 0
         pChanFreqs      long 0
+        pClearBuffer    long 0                  ' bitmask of ADC channels that need to clear their remaining data buffer.
 
         rateArray     long 0[nAnalogI_CON]     ' array to store rates for channels during CalculateBandwidth.
 pub Init
@@ -46,7 +47,7 @@ pub Init
 
   
   return WAVCOG
-pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, ChangeAddr, ChannelsAddr, RatesAddr, DigOutAddr, DigDirAddr, ChanFreqsAddr)
+pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, ChangeAddr, ChannelsAddr, RatesAddr, DigOutAddr, DigDirAddr, ChanFreqsAddr, ClearBufferAddr)
   {{ Defines data that is shared among all object instances using DAT blocks }}
 
   nAnalogI:=nAnalogI2
@@ -62,7 +63,7 @@ pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, Ch
   pDigOut:=DigOutAddr
   pDigDir:=DigDirAddr
   pChanFreqs:=ChanFreqsAddr
-
+  pClearBuffer:=ClearBufferAddr
 
 pub setADCCOG(ADCCOGvar, ADCloopaddr)
   ADCCOG:=ADCCOGvar            
@@ -90,7 +91,8 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       long[pExData+12]:=long[pnAvg]      
     5: ' "Stop"  { channels to stop as bitmask }
       long[pChannels] := long[pChannels] & (!long[pExData+0]) 
-      long[pChange]   |= long[pExData+0]                                             
+      long[pChange]   |= long[pExData+0]
+      ClearBuffers(long[pExData+0])                                             
         retV:=1    
         long[pExData+0] := 3      
         long[pExData+4]:=CalculateBandwidth 
@@ -114,6 +116,7 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
           
         long[pRates + offset] := val/nAvg
         long[pChange]  |= 1<<chn                                            
+        ClearBuffers(1<<chn)                                             
         retV:=1    
         long[pExData+0] := 3     
         long[pExData+4]:=CalculateBandwidth 
@@ -184,6 +187,25 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       CalculateBandwidth 
 
   return retV
+pub ClearBuffers(chans) | oldChannels
+{{Waits for the channels specified in a bitmask to clear any data in their buffers.
+Calling this will temporarily stop any reads from going on for the specified channel.}}
+
+' first we need to temporarily stop this channel.
+oldChannels := long[pChannels]
+long[pChannels] := long[pChannels] & (!chans) 
+long[pChange]   |= chans
+
+'now let the DataLoop know to empty those buffers
+long[pClearBuffer] := chans
+
+'wait until all buffers are cleared again.
+repeat until long[pClearBuffer]==0
+
+' now lets restore any channels that were running.
+long[pChannels] := oldChannels
+long[pChange] |= chans
+
 pub ChangePwm(ch, val) |offset, On, OnTime, OffTime, period
   { calculate on/off time for given duty
     min = 4
@@ -223,7 +245,8 @@ pub ChangePwm(ch, val) |offset, On, OnTime, OffTime, period
 
 pub CalculateBandwidth | retV, totalBandwidth, ch, ChanFreqs, rate, LargestRate, LargestCh
 {{ Calculates the approxuimate bandwidth for transmitting all the ADC channels.
- Adjusts low/high frequency channels to use different protocols according to bandwidth requirments}}
+ Adjusts low/high frequency channels to use different protocols according to bandwidth requirments
+ Calling this function sets the global pChanFreqs variable}}
   
   totalBandwidth:=0 ' total bandwidth used so far.
   ch:=0
