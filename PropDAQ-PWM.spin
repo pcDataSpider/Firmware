@@ -144,11 +144,11 @@ pub Main | n, i
   lastSync:=cnt
   nextSync:=lastSync+syncDelay
                            
-'  pwm1.start( %0111, 1015) 
-'  pwm1.changePwmAsm(000) 
-'  pwm2.start( %1000, 1015)
-'  pwm2.changePwmAsm(000)
-  'DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
+  pwm1.start( %0111, 1015) 
+  pwm1.changePwmAsm(000) 
+  pwm2.start( %1000, 1015)
+  pwm2.changePwmAsm(000)
+  DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
   RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
   DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      
   'Msg.dec(DIGCOG)
