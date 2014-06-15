@@ -115,7 +115,7 @@ pub Main | n, i
   pDigIn  := @DigIn
   pDigOut := @DigOut
   pDigDir := @DigDir
-  pDbgX   := @Dbg1
+  'pDbgX   := @Dbg1
 
 
 
@@ -148,7 +148,7 @@ pub Main | n, i
   'pwm1.changePwmAsm(000) 
   'pwm2.start( %1000, 1015)
   'pwm2.changePwmAsm(000)
-  DIGCOG:=cognew( @DigitalLoop, 0)+1                    ' start Digital Cog                
+  DIGCOG:=cognew( @EventCog, 0)+1                    ' start Digital Cog                
   RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
   DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      
   'Msg.dec(DIGCOG)
@@ -361,132 +361,6 @@ pub WaitMS(MS)
 pub TogglePin(Pin)
  {{toggles the debugging pin to check with a scope/LED}} 
  !outa[Pin]
-DAT
-org 0
-jmp #EventLoop
-' defined actions:
-Action 
-        mov   Tmp2,     Tmp
-        and   Tmp2,      #$FF
-        shr Tmp,        #8
-                                   
-        cmp   Tmp2,     #01     WZ
- if_z   call  #AIStart
-        cmp   Tmp2,     #02     WZ
- if_z   call  #AIStop
- 
-Action_ret ret
-AIStart
-        mov    Tmp2,    #1                      ' get bitmask of ch idx
-        shl    Tmp2,    Tmp                     '
-        rdlong Tmp,     pChannels               ' read current AI states
-        or     Tmp,     Tmp2                    ' add idx to current active channels
-        wrlong Tmp,     pChannels               ' write new AI states
-        wrlong Tmp2,    pChange                 ' notify changes
-AIStart_ret ret
-
-AIStop                      
-        mov    Tmp2,    #1                      ' get bitmask of ch idx
-        shl    Tmp2,    Tmp                     '                       
-        xor    Tmp2,    Tmp2                    ' negate bitmask
-        rdlong Tmp,     pChannels               ' get current AI states 
-        and    Tmp,     Tmp2                    ' stop idx channel
-        wrlong Tmp,     pChannels               ' write new AI states
-        xor    Tmp2,    Tmp2                    ' get original bitmask
-        wrlong Tmp2,    pChange                 ' notify changes
-AIStop_ret ret
-
-' Loop starts:
-EventLoop
-' set pin directions, etc
-        rdlong ChanDir, pDigDir                 WZ
-        call #setPinDir
-:loop
-              'read dig inputs
-              mov       input,  ina             ' read all pins
-              and       input,  inMask          ' only check input pins
-              'look at changed pins
-              mov       changedIns, inputs
-              xor       changedIns, prevIns     WZ
-        if_nz call      #readInput              ' notify other cogs on change            
-              'set digital outputs
-              rdlong    chanOut,pDigOut         WZ                      
-              shl       chanOut,#cDigitalPin    ' read state of output pins
-              and       chanOut,outMask        ' only set output pins  
-              mov       outa,   chanOut 
-        
-
-              'Events:
-
-              ' pin change event
-              CMP       changeIns, #PIN           WZ
-              MOV       Tmp,    #ACTIONTYPE
-        if_z  call      #Action
-
-
-              ' pin high event (rising edge)
-              CMP       changeIns, #PIN         WC
-              mov       Tmp,    inputs          
-              and       Tmp,    #PIN            WZ
-if_nz_and_nc  call      #ACTION
-              ' pin low event  (falling edge)
-              CMP       changeIns, #PIN         WC
-              mov       Tmp,    inputs
-              and       Tmp,    #PIN            WZ
-if_z_and_nc   call      #ACTION
-              ' while high                        
-              mov Tmp,  inputs
-              and Tmp,  #PIN                    WZ
-        if_z  call      #ACTION
-              'while low
-              mov Tmp,  inputs
-              and Tmp,  #PIN                    WZ
-        if_nz call      #ACTION
-
-
-        'if change then notify(Change)
-
-        jmp #:loop
-
-                                   
-readInput                            
-              mov       prevInput,input         ' save state 
-              shr       input,  #cDigitalPin    ' shift back so that pin# -> channel# 
-              or        input,  MSB             ' set MSB       
-              wrlong    input,  pDigIn          ' write new value              
-readInput_ret ret
-
-setPinDir
-              or        chanDir,   MSB             ' set MSB
-              xor       chanDir,   MSB             ' clear MSB 
-              wrlong    chanDir,   pDigDir         ' save w/o MSB
-               
-              shl       chanDir,   #cDigitalPin    ' adjust from channel# -> pin#
-              mov       dira,   chanDir            ' set new pin directions      
-              ' save inMask and outMask
-              mov       outMask,chanDir
-              xor       chanDir,Neg1_2
-              mov       inMask, chanDir
-              and       inMask, PinMask
-                                                       
-setPinDir_ret ret
-
-
-outMask       long      0       ' pin mask for outputs
-inMask        long      0       ' pin mask for inputs    
-PinMask       long      %00000000111111110000000000000000
-
-inputs        long      0       ' state of input pins 
-chanOut       long      0       'state of output pins 
-chanDir       long      0       ' channel directions   
-prevIns       long      0       ' previous state of input pins
-changedIns    long      0       ' pins that have changed
-                                
-pChannels     long      0       ' pointer to active channels
-pChange       long      0       ' pointer to changed channels
-
-MSB           long      $80000000
-Neg1_2        long      -1              
 {
 DAT
 org 0
