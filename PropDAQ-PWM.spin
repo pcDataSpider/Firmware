@@ -29,6 +29,7 @@ obj
   Stk       : "Stack Length"           'Include Stack Length Object
   pwm1      : "AsmPwm"                                  
   pwm2      : "AsmPwm"
+  Events    : "EventLoop"
  ' Streams   : "StreamData"  
 
 var              
@@ -69,6 +70,7 @@ dat     ' channel related data
         DigOut          long %00000000                  ' state of output channels 
         DigIn           long 0                  ' state of input channels (MSB set when changed)
 
+        EvtMsg          long 0
         'Sync deadlines
         nextSync        long 0
         lastSync        long 0
@@ -112,9 +114,9 @@ pub Main | n, i
 
   
   ' init data for Digital Cog
-  pDigIn  := @DigIn
-  pDigOut := @DigOut
-  pDigDir := @DigDir
+  'pDigIn  := @DigIn
+  'pDigOut := @DigOut
+  'pDigDir := @DigDir
   'pDbgX   := @Dbg1
 
 
@@ -148,15 +150,15 @@ pub Main | n, i
   'pwm1.changePwmAsm(000) 
   'pwm2.start( %1000, 1015)
   'pwm2.changePwmAsm(000)
-  DIGCOG:=cognew( @EventCog, 0)+1                    ' start Digital Cog                
+  Events.start(@EvtMsg, @DigDir, @DigOut, @DigIn, @Channels, @Change)
+  Events.AddEvent(2,2,$1FF,1)
+  Events.AddEvent(2,3,$1FF,1)
+
+  'DIGCOG:=cognew( @EventCog, 0)+1                    ' start Digital Cog                
   RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
   DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      
-  'Msg.dec(DIGCOG)
-  'Msg.char("|")
-  'Msg.dec(RDCOG)
-  'Msg.char("|")
-  'Msg.dec(DATCOG)
-  'Msg.char("|")
+
+  WAITMS(10000)
 
 pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,AvgCnt, addr, len, curRate, bitsLeft,chk
   ' wait until a cog is available to start the ADC.
@@ -330,6 +332,9 @@ pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, 
     curVal:=DigIn~
     if curVal                                                       
       sendDig(cnt,curVal&$7FFFFFFF)
+    curVal:=EvtMsg~
+    if curVal
+      Msg.sendControl(curVal,@ExData,0)
 
     
 pub sendSync
