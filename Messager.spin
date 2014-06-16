@@ -100,8 +100,6 @@ pub Start
       Com.dec(ComCog)  
       Com.str(String ("BADLOCK:"))
     return 0
-    
-  ExecCB.Init   
                                        
   return ComCog
 pub Stop

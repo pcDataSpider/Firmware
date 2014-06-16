@@ -122,7 +122,7 @@ pub Main | n, i
 
 
                                        
-  ExecCB.InitData(nAnalogI, nAnalogO, @nAvg, @pwmData, @pwmExec, 1015, @Change, @Channels, @Rates, @DigOut, @DigDir, @ChanFreqs, @clearBuffer)        
+  ExecCB.InitData(nAnalogI, nAnalogO, @nAvg, @pwmData, @pwmExec, 1015, @Change, @Channels, @Rates, @DigOut, @DigIn, @DigDir, @ChanFreqs, @clearBuffer, @EvtMsg)        
   'Streams.Init                                        
 
   MSGCOG:=Msg.start
@@ -149,11 +149,9 @@ pub Main | n, i
   'pwm1.start( %0111, 1015) 
   'pwm1.changePwmAsm(000) 
   'pwm2.start( %1000, 1015)
-  'pwm2.changePwmAsm(000)
-  Events.start(@EvtMsg, @DigDir, @DigOut, @DigIn, @Channels, @Change)
-  Events.AddEvent(2,2,$1FF,1)
-  Events.AddEvent(2,3,$1FF,1)
-
+  'pwm2.changePwmAsm(000)                                            
+  ExecCB.startEvents
+  ExecCB.startWave
   'DIGCOG:=cognew( @EventCog, 0)+1                    ' start Digital Cog                
   RDCOG:= cognew( ReadLoop, @Stack )+1                  ' start readloop (handles all supervisory code)
   DATCOG:=cognew( DataLoop, @Stack2 )+1                 ' start ADC AND the data loop (handles processing data)                                                                      

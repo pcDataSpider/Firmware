@@ -13,7 +13,8 @@ Con
 
        
 obj
-  wav       : "WaveGen"
+  wav           : "WaveGen"
+  Events        : "EventLoop"
 
 var
         byte WAVCOG         
@@ -38,16 +39,27 @@ dat
         pClearBuffer    long 0                  ' bitmask of ADC channels that need to clear their remaining data buffer.
 
         rateArray     long 0[nAnalogI_CON]     ' array to store rates for channels during CalculateBandwidth.
-pub Init
+pub startWave
   {{ Object Instance specific Init method }}
   WAVCOG:=wav.start(  long[pPwmData+0], long[pPwmData+4], pwmPeriod )
   wav.chngDig(000, 00, %00000000000011110000000000000000)
   wav.chngWav(1, 0, 1000, 1)
   wav.chngWav(1, 0, 1000, 2)
-
-  
   return WAVCOG
-pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, ChangeAddr, ChannelsAddr, RatesAddr, DigOutAddr, DigDirAddr, ChanFreqsAddr, ClearBufferAddr)
+pub startEvents
+  Events.start
+                               
+  Events.setTimer(0,$010000000)
+  Events.setTimer(1,$020000000)
+  Events.AddEvent(3,1,$1FF,42)
+  
+  Events.AddEvent(0,1,0,20)
+  Events.AddEvent(3,0,$1FF,0)
+  
+  Events.AddEvent(0,2,1,1)
+  Events.AddEvent(3,0,$1FF,1) 
+
+pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, ChangeAddr, ChannelsAddr, RatesAddr, DigOutAddr, DigInAddr, DigDirAddr, ChanFreqsAddr, ClearBufferAddr, EvtMsgAddr)
   {{ Defines data that is shared among all object instances using DAT blocks }}
 
   nAnalogI:=nAnalogI2
@@ -64,6 +76,8 @@ pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, Ch
   pDigDir:=DigDirAddr
   pChanFreqs:=ChanFreqsAddr
   pClearBuffer:=ClearBufferAddr
+
+  Events.init(EvtMsgAddr, DigDirAddr, DigOutAddr, DigInAddr, ChannelsAddr, ChangeAddr)
 
 pub setADCCOG(ADCCOGvar, ADCloopaddr)
   ADCCOG:=ADCCOGvar            
@@ -184,8 +198,13 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       nAvg:=val            
       long[pnAvg]:=nAvg  
       long[pChange]|=255
-      CalculateBandwidth 
-
+      CalculateBandwidth
+    15: ' setEventTimer message SetTimer(Timer#, Delay)                                
+      Events.setTimer(long[pExData + 0],long[pExData + 4])
+    16: ' addEvent message  AddEvent(Condition, Action, ConditionParam, ActionParam)                               
+      Events.AddEvent(long[pExData + 0],long[pExData + 4],long[pExData + 8],long[pExData + 12])
+    17: ' resetEvents message
+      Events.Reset
   return retV
 pub ClearBuffers(chans) | oldChannels
 {{Waits for the channels specified in a bitmask to clear any data in their buffers.
