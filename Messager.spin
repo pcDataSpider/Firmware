@@ -295,10 +295,12 @@ pub txEOP
   Com.tx(EOP)
 pub txESC
   Com.tx(ESC)
-pub txData(c) 'sends a character over serial port, avoiding EOP and ESC characters
+pub txData(c, chk) 'sends a character over serial port, avoiding EOP and ESC characters
   if c == EOP or c == ESC
     Com.tx(ESC)
+    chk := checksum(chk, ESC)
   Com.tx(c)
+  return checksum(chk, c)
 pub char( c )  ' sends a char over the serial port 
   Com.tx(c)  
 pub str( s ) 

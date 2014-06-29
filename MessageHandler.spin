@@ -49,17 +49,6 @@ pub startWave
   return WAVCOG
 pub startEvents
   Events.start
-                               
-  Events.setTimer(0,$010000000)
-  Events.setTimer(1,$020000000)
-  Events.AddEvent(3,1,$1FF,42)
-  
-  Events.AddEvent(0,1,0,20)
-  Events.AddEvent(3,0,$1FF,0)
-  
-  Events.AddEvent(0,2,1,1)
-  Events.AddEvent(3,0,$1FF,1) 
-
 pub InitData(nAnalogI2, nAnalogO2,nAvgAddr, pwmDataAddr, pwmExecAddr, period, ChangeAddr, ChannelsAddr, RatesAddr, DigOutAddr, DigInAddr, DigDirAddr, ChanFreqsAddr, ClearBufferAddr, EvtMsgAddr)
   {{ Defines data that is shared among all object instances using DAT blocks }}
 
