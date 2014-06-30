@@ -12,6 +12,11 @@ Con
   cminOn  = 4           ' constants for PWM duty calculations
   cminOff = 16                   
 
+  DPIN1 = 16 'blue
+  DPIN2 = 17
+  DPIN3 = 18
+  DPIN4 = 19 'green
+
        
 obj
   wav           : "WaveGen"
@@ -75,6 +80,14 @@ pub setADCCOG(ADCCOGvar, ADCloopaddr)
   
 pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
   {{ Handle parsed messages }}
+  dira[DPIN1]~~
+  dira[DPIN2]~~
+  dira[DPIN3]~~
+  dira[DPIN4]~~     
+  togglepin(DPIN2)
+  waitms(50)     
+  togglepin(DPIN2)
+  
   retV:=-1
   case NameNum
     0: ' talk message. recieving this is a mistake
@@ -110,6 +123,7 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
         if val<1 'can't handle zero
           val:=1
 
+        {
         if (val/nAvg) < MIN_ADC_PERIOD
           nAvg:=val/MIN_ADC_PERIOD
           if nAvg < 1
@@ -117,16 +131,17 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
           ' write changes to shared mem    
           long[pnAvg]:=nAvg  
           long[pChange]|=255
+        }
           
         long[pRates + offset] := val/nAvg
         long[pChange]  |= 1<<chn                                            
         ClearBuffers(1<<chn)                                             
         retV:=1    
-        long[pExData+0] := 3     
+        long[pExData+0] := 4     
         long[pExData+4]:=CalculateBandwidth 
         long[pExData+8]:=long[pChanFreqs]       
         long[pExData+12]:=long[pnAvg]            
-        long[pExData+16]:=long[pnAvg]
+        long[pExData+16]:=long[pRates + offset]
       elseif chn < nAnalogO+nAnalogI ' set analog output channel
         changePwm(chn, val)               
       else                 ' set digital channel
@@ -163,6 +178,7 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
     12: ' point message {value, timestamp}
     13: ' sync message {timestamp, rollovers} 
     14: 'avg message. changes the sample averaging. {new nAvg}
+      togglePin(DPIN1)
       val:=long[pExData + 0] ' get new average 
       if val < 1 ' can't average less than 1 point at a time!
         val:=1
@@ -170,7 +186,7 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       chn:=0    
       repeat until chn == nAnalogI       
         sendRate:=long[pRates +  (chn*4)] * nAvg
-        if sendRate/val < MIN_ADC_PERIOD and val <> 1 
+        {if sendRate/val < MIN_ADC_PERIOD and val <> 1 
           val:= sendRate/MIN_ADC_PERIOD
           if val < 1
             val:=1
@@ -181,14 +197,21 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
           long[pExData+12]:=long[pnAvg]      
           long[pExData+16]:=42
           chn:=0
-        else                             
+        else}                             
           long[pRates +  (chn*4)]:= sendRate / val
           chn+=1        
       ' write changes to shared mem                    
       nAvg:=val            
-      long[pnAvg]:=nAvg  
-      long[pChange]|=255
-      CalculateBandwidth
+      long[pnAvg]:=nAvg 
+      CalculateBandwidth 
+      long[pChange]|=$FF
+      togglePin(DPIN1)
+
+                                                   
+        retV:=1    
+        long[pExData+0] := 1                    
+        long[pExData+4]:=long[pnAvg] 
+      
     15: ' setEventTimer message SetTimer(Timer#, Delay)                                
       Events.setTimer(long[pExData + 0],long[pExData + 4])
     16: ' addEvent message  AddEvent(Condition, Action, ConditionParam, ActionParam)                               
@@ -314,8 +337,8 @@ retV:=totalbandwidth
 
 return retV
 
-
-
-
-
- 
+pub TogglePin(Pin)
+ {{toggles the debugging pin to check with a scope/LED}} 
+ !outa[Pin]
+pub WaitMS(MS)                
+  waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS 

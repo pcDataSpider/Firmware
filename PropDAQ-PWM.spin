@@ -209,6 +209,7 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
             'make sure no streams are open
             CloseStream(curstream+1,chk,lastTime)
             SendPoint(time, val | (ch<<12) )
+            lastTime := time
           else
             ' test if this is the first byte in the stream.
             if !isStreamOpen(ch)   
@@ -299,14 +300,14 @@ return bitsLeft
 pri closeStream(ch,chk,lastVal) | blah
 if curStream<>ch+1 'only close if already open. otherwise we could clear a lock we didnt take.
   return                            
-chk:=sendBits(lastVal, 32, chk)
-if bitsLeft
-  chk:=Msg.txData(bitsLeft,chk)
-Msg.txEOP             
-Msg.char(chk) 
-Msg.Clear
-curStream:=0
-return
+else
+  chk:=sendBits(lastVal, 32, chk)
+  if bitsLeft
+    chk:=Msg.txData(bitsLeft,chk)
+  Msg.txEOP             
+  Msg.char(chk) 
+  Msg.Clear
+  curStream:=0
 pri isStreamOpen(ch)
 if curStream == ch+1
   return true
