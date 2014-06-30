@@ -289,6 +289,7 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
   Clear              
           
 pub checksum(chksum, value)
+  value := value & $FF
   chksum:=chksum & 255 'ignore higher order bits
   return  ((((chksum<<1) | (chksum>>7)) & 255) + value) & 255
 pub txEOP
@@ -296,6 +297,7 @@ pub txEOP
 pub txESC
   Com.tx(ESC)
 pub txData(c, chk) 'sends a character over serial port, avoiding EOP and ESC characters
+  c:= c&$FF
   if c == EOP or c == ESC
     Com.tx(ESC)
     chk := checksum(chk, ESC)

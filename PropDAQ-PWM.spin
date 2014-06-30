@@ -40,7 +40,7 @@ var
   byte DIGCOG
   byte DATCOG
   byte MSGCOG
-  byte BitsLeft              
+  word bitsLeft              
 
 dat                                           
         ExData          long    0[EX_DAT_LEN]
@@ -203,11 +203,11 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
           AvgCnt:=val>>25
           val:=(val&$00FFFFFF) / AvgCnt  
           time:= ADCBuffers[ i + 1 ]
-          
+  
           if not ChanFreqs & (1<<ch)
             'LowFreq mode..
-            'make sure no streams are open (close it in some bad state);y098y
-            CloseStream(curstream+1,0,0)
+            'make sure no streams are open
+            CloseStream(curstream+1,chk,lastTime)
             SendPoint(time, val | (ch<<12) )
           else
             ' test if this is the first byte in the stream.
@@ -216,26 +216,11 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
               curRate:=streamRate[ch] 
               bitsLeft:=openStream(ch)
               chk:=0
-              
+              lastTime:=time-curRate 'reset lastTime
+
               'transmit data  ( add curRate and time to stream. both 32bit values.
-              sendData:=curRate
-              repeat 2
-                N:=32
-                repeat until N<8
-                  if bitsLeft 
-                    N:=N-4 'only work in increments of 4 bits to make things simpler 
-                    tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
-                    Msg.txData(tmpByte)  
-                    chk:=Msg.checksum(chk,tmpByte) 
-                    bitsLeft:=0  
-                  else
-                    N:=N-8 'send a whole byte
-                    tmpByte:=sendData>>N   
-                    Msg.txData(tmpByte)  
-                    chk:=Msg.checksum(chk,tmpByte)
-                if N>0       'add the last 4 bits
-                  bitsLeft:=((sendData&15)<<4)|%1000000000 'add higher bits to signify it has data   
-                sendData:=time  
+              chk:=sendBits(curRate, 32, chk)
+              chk:=sendBits(time, 32, chk)
               
               beg:=i 'rest beginning to point here
               valCount:=0 'no data yet. 
@@ -243,28 +228,12 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
             tmpByte:=time-lastTime
             if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
               longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in. 
-              sendData:=lastTime
-              N:=32 
-              repeat until N<8
-                if bitsLeft 
-                  N:=N-4 'only work in increments of 4 bits to make things simpler 
-                  tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
-                  Msg.txData(tmpByte)  
-                  chk:=Msg.checksum(chk,tmpByte) 
-                  bitsLeft:=0  
-                else
-                  N:=N-8 'send a whole byte
-                  tmpByte:=sendData>>N   
-                  Msg.txData(tmpByte)  
-                  chk:=Msg.checksum(chk,tmpByte)
-              if N>0       'add the last 4 bits
-                bitsLeft:=((sendData&15)<<4)|%1000000000 'add higher bits to signify it has data   
-           
-              closeStream(ch,chk,bitsLeft)
+              closeStream(ch,chk,lastTime)
               beg:=i
               valCount:=0  
               next ' just bail out of this loop iteration
 
+            {  
             'add this value and move on.
             if bitsLeft 'if there are bits already, read in 4 bits, send, then read the rest
               tmp:= bitsLeft | val>>8 'send 4 MSB's (12-4=8)
@@ -278,7 +247,9 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
               Msg.txData(tmp)  
               chk:=Msg.checksum(chk,tmp)
               bitsLeft:=((val)<<4)|%100000000  'add 4 LSB's to bitsLeft, with added higher order bits  
-          valCount+=1   
+            }
+          chk:=sendBits(val, 12, chk)
+          valCount+=1          
           ' move to the next long
           lastTime:=time          
           i+=2                   
@@ -291,59 +262,47 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
       curADCIdx[ch]:=i
       lastTstamp[ch]:=lastTime
       'close stream if it is currently open.
-      sendData:=lastTime
-      N:=32 
-      repeat until N<8
-        if bitsLeft 
-          N:=N-4 'only work in increments of 4 bits to make things simpler 
-          tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
-          Msg.txData(tmpByte)  
-          chk:=Msg.checksum(chk,tmpByte) 
-          bitsLeft:=0  
-        else
-          N:=N-8 'send a whole byte
-          tmpByte:=sendData>>N   
-          Msg.txData(tmpByte)  
-          chk:=Msg.checksum(chk,tmpByte)
-      if N>0       'add the last 4 bits
-        bitsLeft:=((sendData&15)<<4)|%1000000000 'add higher bits to signify it has data   
-      closeStream(ch,chk,bitsLeft)
+      closeStream(ch,chk,lastTime)
       ch++
       
 
-pri sendBits(sendData, N, chk):chk | tmpByte  
-      repeat until N<8
-        if bitsLeft 
-          N:=N-4 'only work in increments of 4 bits to make things simpler 
-          tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
-          Msg.txData(tmpByte)  
-          chk:=Msg.checksum(chk,tmpByte) 
-          bitsLeft:=0  
-        else
-          N:=N-8 'send a whole byte
-          tmpByte:=sendData>>N   
-          Msg.txData(tmpByte)  
-          chk:=Msg.checksum(chk,tmpByte)
-      if N>0       'add the last 4 bits
-        bitsLeft:=((sendData&15)<<4)|%1000000000 'add higher bits to signify it has data   
-                       
-pri openStream(ch):chk | blah
+pri sendBits(sendData, N, chk) | tmpByte
+{{ sendData = value to send
+ N=number of bits in sendData (must be multiple of 4)
+ chk = current checksum}}
+
+repeat until N<8
+  if bitsLeft 
+    N:=N-4 'only work in increments of 4 bits to make things simpler 
+    tmpByte:= bitsLeft | sendData>>N 'add 4 bits to bitsLeft
+    chk:=Msg.txData(tmpByte,chk)  
+    bitsLeft:=0  
+  else
+    N:=N-8 'send a whole byte
+    tmpByte:=sendData>>N   
+    chk:=Msg.txData(tmpByte,chk)
+if N>0       'add the last 4 bits
+  bitsLeft:=((sendData&15)<<4)| %1000000000 'add higher bits to signify it has data   
+return chk 
+pri openStream(ch) | blah
 if curStream
   closeStream(curStream-1,0,0) 'close a bad stream. log an error or something
   ExData[0]:=9999  
   Msg.debugmsg(String("Closing bad stream?"))
   Msg.sendControl(1,@ExData,1)
-curStream:=ch+1
-
+if ch>3
+  ch:=3  
+curStream:=ch+1               
 Msg.Lock    'take lock for the duration that this stream is open. (will close at the end of a stream packet)
-return (%1000 | ch)<<4 'return the first byte of the stream packet.
-
-pri closeStream(ch,chk,bitsLeft) | blah
+bitsLeft := ((%1000 | ch)<<4)  |%1000000000 'add higher bits to signify it has data   
+return bitsLeft
+pri closeStream(ch,chk,lastVal) | blah
 if curStream<>ch+1 'only close if already open. otherwise we could clear a lock we didnt take.
-  return
+  return                            
+chk:=sendBits(lastVal, 32, chk)
 if bitsLeft
-  Msg.txData(bitsLeft)
-Msg.txEOP
+  chk:=Msg.txData(bitsLeft,chk)
+Msg.txEOP             
 Msg.char(chk) 
 Msg.Clear
 curStream:=0
