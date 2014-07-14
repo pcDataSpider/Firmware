@@ -84,9 +84,9 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
   dira[DPIN2]~~
   dira[DPIN3]~~
   dira[DPIN4]~~     
-  togglepin(DPIN2)
+  togglepin(DPIN1)
   waitms(50)     
-  togglepin(DPIN2)
+  togglepin(DPIN1)
   
   retV:=-1
   case NameNum

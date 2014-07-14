@@ -43,8 +43,10 @@ var
   word bitsLeft              
 
 dat
-        ExDataLock      byte    0                           
-        ExData          long    0[EX_DAT_LEN]
+        PtData          long    0[5] ' max used should be 2
+        DgData          long    0[5] ' max used should be 2
+        SyncData        long    0[5] ' max used should be 1 (2 for debugging)
+        DbgData         long    0[5]
 dat     ' channel related data
         org 0
         ' these values define different channels
@@ -137,9 +139,8 @@ pub Main | n, i
    
   ' create locks 
   LockID:=LockNew 
-
-  ExDataLock:=LockNew
-  if LockID==-1 or ExDataLock==-1
+                              
+  if LockID==-1
     repeat
       Msg.Str(String("Failed:Locks>"))
     return 0
@@ -209,10 +210,9 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
   
           if not ChanFreqs & (1<<ch)
             'LowFreq mode..
-            'make sure no streams are open
-            CloseStream(curstream+1,chk,lastTime)
+            'Close an open stream on this channel
+            CloseStream(ch,chk,lastTime)
             SendPoint(time, val | (ch<<12) )
-            lastTime := time
           else
             ' test if this is the first byte in the stream.
             if !isStreamOpen(ch)   
@@ -252,7 +252,7 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
               chk:=Msg.checksum(chk,tmp)
               bitsLeft:=((val)<<4)|%100000000  'add 4 LSB's to bitsLeft, with added higher order bits  
             }
-          chk:=sendBits(val, 12, chk)
+            chk:=sendBits(val, 12, chk)
           valCount+=1          
           ' move to the next long
           lastTime:=time          
@@ -291,14 +291,14 @@ return chk
 pri openStream(ch) | blah
 if curStream
   closeStream(curStream-1,0,0) 'close a bad stream. log an error or something
-  exLock
-  ExData[0]:=9999  
+  DbgData[0]:=9999  
   Msg.debugmsg(String("Closing bad stream?"))
-  Msg.sendControl(1,@ExData,1)
-  exRelease
+  Msg.sendControl(1,@DbgData,1)
 if ch>3
   ch:=3  
-curStream:=ch+1               
+curStream:=ch+1             
+  dira[DPIN2]~~
+  outa[DPIN2]~~                
 Msg.Lock    'take lock for the duration that this stream is open. (will close at the end of a stream packet)
 bitsLeft := ((%1000 | ch)<<4)  |%1000000000 'add higher bits to signify it has data   
 return bitsLeft
@@ -310,7 +310,9 @@ else
   if bitsLeft
     chk:=Msg.txData(bitsLeft,chk)
   Msg.txEOP             
-  Msg.char(chk) 
+  Msg.char(chk)
+  dira[DPIN2]~~
+  outa[DPIN2]~ 
   Msg.Clear
   curStream:=0
 pri isStreamOpen(ch)
@@ -338,41 +340,33 @@ pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, 
       sendDig(cnt,curVal&$7FFFFFFF)
     curVal:=EvtMsg~
     if curVal
-      Msg.sendControl(curVal,@ExData,0)
+      Msg.sendControl(curVal,0,0)
 
     
-pub sendSync
-  exLock
-  ExData[0]:=cnt
+pub sendSync                      
+  SyncData[0]:=cnt
   if nextSync < lastSync
-    ExData[1]:=1
-    Msg.sendControl(13,@ExData,2)
+    SyncData[1]:=1
+    Msg.sendControl(13,@SyncData,2)
   else
-    Msg.sendControl(13,@ExData,1)
-  exRelease
+    Msg.sendControl(13,@SyncData,1) 
   lastSync:=nextSync
   nextSync:=nextSync+SyncDelay
 pub sendDig( t,v ) 
  ' send a message
-  exLock   
-  ExData[0]:=v   
-  ExData[1]:=t 
+  DgData[0]:=v   
+  DgData[1]:=t 
  ' send a message
-  Msg.sendControl(10,@ExData,2)
-  exRelease
+  Msg.sendControl(10,@DgData,2)
 pub sendPoint(t,v )   
  ' send a message   
-  exLock
-  ExData[0]:=v   
-  ExData[1]:=t     
-  ExData[2]:=t 
+  PtData[0]:=v   
+  PtData[1]:=t                
  ' send a message
-  Msg.sendControl(12,@ExData,3)
-  exRelease
-pri exLock
-  repeat until not lockset( exDataLock )
-pri exRelease
-  lockclr( exDataLock )
+ dira[DPIN1]~~
+ outa[DPIN1]~~
+  Msg.sendControl(12,@PtData,2)
+  outa[DPIN1]~
 pub WaitMS(MS)                
   waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS
 

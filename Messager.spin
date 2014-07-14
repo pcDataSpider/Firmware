@@ -289,6 +289,7 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
   repeat n
     com.tx(sendBuffer[m++])
   Clear
+
   clearControl        
           
 pub checksum(chksum, value)
@@ -325,14 +326,20 @@ pub pause | c
     c:=Com.rxcheck  
   until c<>-1  
 pub Lock                    
-  dira[DPIN4]~~                          
+  dira[DPIN4]~~
+  outa[DPIN4]~~                          
   repeat until not lockSet(qwfp)
-pub Clear                                 
+pub Clear      
+  dira[DPIN4]~~ 
+  outa[DPIN4]~                      
   lockClr(qwfp)
-pri LockControl                    
-  dira[DPIN4]~~                          
+pri LockControl 
+  dira[DPIN3]~~
+  outa[DPIN3]~~ 
   repeat until not lockSet(ControlLock)
-pri ClearControl                                 
+pri ClearControl              
+  dira[DPIN3]~~
+  outa[DPIN3]~                                
   lockClr(ControlLock)
 pub nextID
   newID:=(newID+1) & $FF
