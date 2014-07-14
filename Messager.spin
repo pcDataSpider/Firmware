@@ -55,6 +55,7 @@ dat 'global shared data
    newID         long 0
    
    qwfp     byte 0
+   ControlLock byte 0
    ComCog     byte 0            
    Buffer     byte 0[MAX_BUFFER]
    PacketBuffer byte 0[MAX_MSG]
@@ -92,9 +93,10 @@ pub Start
       Com.str(String ("MCOG:"))
       Com.dec(ComCog)
     return 0
-           
+                     
   qwfp:=LockNew
-  if qwfp==-1
+  ControlLock:=LockNew
+  if qwfp==-1 or ControlLock==-1
     repeat                  
       Com.str(String ("MCOG:"))
       Com.dec(ComCog)  
@@ -246,7 +248,7 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
     nameID - Control Message ID
     params - Long array of message parameters
     paramLen - number of longs in params}}
-                           
+  lockControl                         
   n:=0
   chkSum:=0
           
@@ -286,7 +288,8 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
   m:=0           
   repeat n
     com.tx(sendBuffer[m++])
-  Clear              
+  Clear
+  clearControl        
           
 pub checksum(chksum, value)
   value := value & $FF
@@ -326,6 +329,11 @@ pub Lock
   repeat until not lockSet(qwfp)
 pub Clear                                 
   lockClr(qwfp)
+pri LockControl                    
+  dira[DPIN4]~~                          
+  repeat until not lockSet(ControlLock)
+pri ClearControl                                 
+  lockClr(ControlLock)
 pub nextID
   newID:=(newID+1) & $FF
   if newID==0

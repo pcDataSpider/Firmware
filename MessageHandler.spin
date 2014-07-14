@@ -98,6 +98,7 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       long[pExData+4] := VERSION    
       retV:=3
     4: ' "Start"  { channels to start as bitmask }
+      ClearBuffers(long[pExData+0])                                             
       long[pChannels] := long[pChannels] | long[pExData+0]
       long[pChange]   |= long[pExData+0]
                                                        
@@ -109,7 +110,6 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
     5: ' "Stop"  { channels to stop as bitmask }
       long[pChannels] := long[pChannels] & (!long[pExData+0]) 
       long[pChange]   |= long[pExData+0]
-      ClearBuffers(long[pExData+0])                                             
         retV:=1    
         long[pExData+0] := 3      
         long[pExData+4]:=CalculateBandwidth 

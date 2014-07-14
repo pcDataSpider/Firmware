@@ -42,7 +42,8 @@ var
   byte MSGCOG
   word bitsLeft              
 
-dat                                           
+dat
+        ExDataLock      byte    0                           
         ExData          long    0[EX_DAT_LEN]
 dat     ' channel related data
         org 0
@@ -75,6 +76,7 @@ dat     ' channel related data
         nextSync        long 0
         lastSync        long 0
 
+        
         'Debug names                        
         dbg1            long 0 
         dbg2            long 0  
@@ -134,11 +136,12 @@ pub Main | n, i
               
    
   ' create locks 
-  LockID:=LockNew
-  if LockID==-1
-    repeat                            
-      Msg.Str(String("<Failed:locks>"))
-    Msg.stop 
+  LockID:=LockNew 
+
+  ExDataLock:=LockNew
+  if LockID==-1 or ExDataLock==-1
+    repeat
+      Msg.Str(String("Failed:Locks>"))
     return 0
                 
   'Msg.Pause                     ' pause for user to start it!
@@ -288,9 +291,11 @@ return chk
 pri openStream(ch) | blah
 if curStream
   closeStream(curStream-1,0,0) 'close a bad stream. log an error or something
+  exLock
   ExData[0]:=9999  
   Msg.debugmsg(String("Closing bad stream?"))
   Msg.sendControl(1,@ExData,1)
+  exRelease
 if ch>3
   ch:=3  
 curStream:=ch+1               
@@ -337,28 +342,37 @@ pub ReadLoop | n, m, mask, curVal, curTime, pushed, ldbg1, ldbg2, ldbg3, ldbg4, 
 
     
 pub sendSync
+  exLock
   ExData[0]:=cnt
   if nextSync < lastSync
     ExData[1]:=1
     Msg.sendControl(13,@ExData,2)
   else
     Msg.sendControl(13,@ExData,1)
+  exRelease
   lastSync:=nextSync
   nextSync:=nextSync+SyncDelay
 pub sendDig( t,v ) 
- ' send a message   
-  ExData[0]:=v   
-    ExData[1]:=t 
  ' send a message
-  Msg.sendControl(10,@ExData,2)                        
-
+  exLock   
+  ExData[0]:=v   
+  ExData[1]:=t 
+ ' send a message
+  Msg.sendControl(10,@ExData,2)
+  exRelease
 pub sendPoint(t,v )   
  ' send a message   
+  exLock
   ExData[0]:=v   
   ExData[1]:=t     
   ExData[2]:=t 
  ' send a message
-  Msg.sendControl(12,@ExData,3)          
+  Msg.sendControl(12,@ExData,3)
+  exRelease
+pri exLock
+  repeat until not lockset( exDataLock )
+pri exRelease
+  lockclr( exDataLock )
 pub WaitMS(MS)                
   waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS
 
