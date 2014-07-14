@@ -253,13 +253,13 @@ pub sendControl(nameID, params, paramLen) | n, m, i, v, bytev, chkSum, pID
   chkSum:=0
           
   'sendBuffer[n++] := 0 ' placeholder for checksum
-  if nameID == EOP ' make sure not to transmit the EOP within the packet
+  if nameID == EOP or nameID==ESC ' make sure not to transmit the EOP within the packet
     sendBuffer[n++] := ESC 
     chkSum := checksum(chksum,ESC)
   sendBuffer[n++] := nameID  
   chkSum := checksum(chksum,nameID)
   pID:=nextID
-  if PID == EOP ' make sure not to transmit the EOP within the packet
+  if PID == EOP or PID == ESC ' make sure not to transmit the EOP within the packet
     sendBuffer[n++] := ESC 
     chkSum := checksum(chksum,ESC)
   sendBuffer[n++] := pID
