@@ -213,47 +213,33 @@ pub DataLoop | i, n, tmpByte,sendData, ch, beg, valCount, val, time, lastTime,Av
             'Close an open stream on this channel
             CloseStream(ch,chk,lastTime)
             SendPoint(time, val | (ch<<12) )
+            valCount+=1          
           else
+            ' test for non consecutive values
+            if isStreamOpen(ch)
+              tmpByte:=time-lastTime
+              if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
+                longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in. 
+                closeStream(ch,chk,lastTime)
+                beg:=i
+                valCount:=0  
+             
             ' test if this is the first byte in the stream.
             if !isStreamOpen(ch)   
               streamRate[ch]:= Rates[ch]*nAvg
               curRate:=streamRate[ch] 
               bitsLeft:=openStream(ch)
               chk:=0
-              lastTime:=time-curRate 'reset lastTime
-
+              
               'transmit data  ( add curRate and time to stream. both 32bit values.
               chk:=sendBits(curRate, 32, chk)
               chk:=sendBits(time, 32, chk)
               
               beg:=i 'rest beginning to point here
               valCount:=0 'no data yet. 
-            ' test for non consecutive values
-            tmpByte:=time-lastTime
-            if (tmpByte>curRate+ERR or tmpByte<curRate-ERR) 'time to send. Either buffer is full, or reached a non-consecutive value
-              longfill( @ADCBuffers + (beg*4), 0, valCount*2) 'clear out values we have read in. 
-              closeStream(ch,chk,lastTime)
-              beg:=i
-              valCount:=0  
-              next ' just bail out of this loop iteration
-
-            {  
-            'add this value and move on.
-            if bitsLeft 'if there are bits already, read in 4 bits, send, then read the rest
-              tmp:= bitsLeft | val>>8 'send 4 MSB's (12-4=8)
-              Msg.txData(tmp)  
-              chk:=Msg.checksum(chk,tmp)
-              Msg.txData(val)         'send 8 LSB's
-              chk:=Msg.checksum(chk,val)
-              bitsLeft:=0
-            else
-              tmp:=val>>4             'send 8 MSB's (12-8=4)
-              Msg.txData(tmp)  
-              chk:=Msg.checksum(chk,tmp)
-              bitsLeft:=((val)<<4)|%100000000  'add 4 LSB's to bitsLeft, with added higher order bits  
-            }
+            
             chk:=sendBits(val, 12, chk)
-          valCount+=1          
+            valCount+=1          
           ' move to the next long
           lastTime:=time          
           i+=2                   
