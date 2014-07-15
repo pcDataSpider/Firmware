@@ -6,7 +6,7 @@ Con
   MAX_BANDWIDTH = 17000  'maximum bandiwdth in bytes per second. 
   MIN_BANDWIDTH = 100 'minimum bandwidth a channel must use to change to HighFreq mode. (mul. by num. samples avg.) Ensures low frequencies use lowfreq mode.
 
-  'MIN_ADC_PERIOD = 8000 ' minimum period for ADC to handle properly
+  'MIN_ADC_PERIOD = 1500 ' minimum period for ADC to handle properly
   MIN_ADC_PERIOD = 1 ' ignore super fast periods
   
   cminOn  = 4           ' constants for PWM duty calculations
