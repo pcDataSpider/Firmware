@@ -83,10 +83,12 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
   dira[DPIN1]~~
   dira[DPIN2]~~
   dira[DPIN3]~~
-  dira[DPIN4]~~     
+  dira[DPIN4]~~
+  
+  togglepin(DPIN1)  
+  waitms(100)     
   togglepin(DPIN1)
-  waitms(50)     
-  togglepin(DPIN1)
+  waitms(100)     
   
   retV:=-1
   case NameNum
@@ -178,7 +180,6 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
     12: ' point message {value, timestamp}
     13: ' sync message {timestamp, rollovers} 
     14: 'avg message. changes the sample averaging. {new nAvg}
-      togglePin(DPIN1)
       val:=long[pExData + 0] ' get new average 
       if val < 1 ' can't average less than 1 point at a time!
         val:=1
@@ -205,7 +206,6 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       long[pnAvg]:=nAvg 
       CalculateBandwidth 
       long[pChange]|=$FF
-      togglePin(DPIN1)
 
                                                    
         retV:=1    

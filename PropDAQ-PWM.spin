@@ -349,10 +349,7 @@ pub sendPoint(t,v )
   PtData[0]:=v   
   PtData[1]:=t                
  ' send a message
- dira[DPIN1]~~
- outa[DPIN1]~~
   Msg.sendControl(12,@PtData,2)
-  outa[DPIN1]~
 pub WaitMS(MS)                
   waitcnt(((clkfreq/1000) * MS) +cnt) 'wait for a specified number of MS
 

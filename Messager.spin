@@ -161,6 +161,8 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
               Tmp.insert(c)
               'Com.tx(c)
             sum:=checksum(sum,c)
+          else
+            sum:=checksum(sum,c)
             'sum<-=1
             'sum+=c
         3: 'character after EOP is chksum  
@@ -169,7 +171,7 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
           quit             
             
       if c==ESC and not escaped
-        escaped:=1
+        escaped:=1          
       else
         escaped:=0
       lastc:=c
@@ -180,6 +182,16 @@ pub Parse | beg,end,numChars,c,state, exec,  r, n, lastc,chk , sum, escaped
     if sum <> chk
       ExData[0]:=sum
       ExData[1]:=chk
+      dira[DPIN1]~~
+      dira[DPIN2]~~
+      dira[DPIN3]~~
+      dira[DPIN4]~~
+       
+      togglepin(DPIN1)  
+      waitms(300)     
+      togglepin(DPIN1)
+      waitms(300)
+
       sendControl(2,@ExData, 2)
     else               
       ' parse key.                  
