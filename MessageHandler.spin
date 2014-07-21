@@ -214,10 +214,17 @@ pub Exec(NameNum, pExData, ValNum) : retV |chn,offset,val,sendRate
       
     15: ' setEventTimer message SetTimer(Timer#, Delay)                                
       Events.setTimer(long[pExData + 0],long[pExData + 4])
-    16: ' addEvent message  AddEvent(Condition, Action, ConditionParam, ActionParam)                               
+    16: ' addEvent message  AddEvent(Condition, ConditionParam, Action, ActionParam)                               
       Events.AddEvent(long[pExData + 0],long[pExData + 4],long[pExData + 8],long[pExData + 12])
+      offset:=16
+      repeat (ValNum-4)/2
+          Events.AddEvent(-1,0,long[pExData + offset],long[pExData + offset+4])
+'          Events.AddEvent(long[pExData + 0],long[pExData + 4],long[pExData + offset],long[pExData + offset+4])
+          offset+=8          
     17: ' resetEvents message
       Events.Reset
+    18: ' enableTimer message
+      Events.trigger(long[pExData + 0])
   return retV
 pub ClearBuffers(chans) | oldChannels
 {{Waits for the channels specified in a bitmask to clear any data in their buffers.

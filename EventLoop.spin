@@ -3,11 +3,13 @@ Con
   _CLKMODE      = XTAL1 + PLL16X
   _XINFREQ      = 5_000_000                          ' 5MHz Crystal
 
-  cDigitalPin   = 16   ' first digital pin# 
+  cDigitalPin   = 16   ' first digital pin#
+  cEvtLoopLen   = 350 
 DAT
 EvtCog        long      0
 NextIns       long      0
 CurTimer      long      0
+Triggers      long      0
 
 DAT 'test code vars
         Debug         long      0
@@ -65,6 +67,7 @@ pDigOut  :=     DigOutAddr
 pDigIn   :=     DigInAddr
 pAIChannels :=  AIChannelsAddr
 pAIChange   :=  AIChangeAddr
+pTriggers := @Triggers
 
 pub start
   EvtCog  := CogNew(@EventCog, 0)
@@ -74,7 +77,7 @@ pub reset
   CogStop(EvtCog)
   ' reset all memory      
   NextIns:= @EventLoopEnd
-  repeat 400
+  repeat cEvtLoopLen
     long[NextIns]:=0
     NextIns += 4         
   NextIns:= @EventLoopEnd
@@ -86,7 +89,10 @@ Timers[(Timer*2)+1]:=Delay
 CogStop(EvtCog)
 EvtCog := CogNew(@EventCog, 0 )
 
-PUB AddEvent(ConditionType, ActionType, ConditionParam, ActionParam)|instructions,InsPtr,ins,ActionRet
+PUB trigger(triggerID)
+repeat until triggers==0
+triggers := triggerID
+PUB AddEvent(ConditionType,  ConditionParam, ActionType, ActionParam)|instructions,InsPtr,ins,ActionRet
 
 
 case ActionType    
@@ -102,7 +108,13 @@ case ActionType
     ActionRet  := (@AIStart_ret - @EventCog)/4
   3: 'AIStop                             
     ActionType := (@AIStop - @EventCog)/4
-    ActionRet  := (@AIStop_ret - @EventCog)/4         
+    ActionRet  := (@AIStop_ret - @EventCog)/4
+  4: 'DOHigh                             
+    ActionType := (@DOHigh - @EventCog)/4
+    ActionRet  := (@DOHigh_ret - @EventCog)/4
+  5: 'DOLow                             
+    ActionType := (@DOLow - @EventCog)/4
+    ActionRet  := (@DOLow_ret - @EventCog)/4         
 case ConditionType                       
   0: 'TimerExpire             
     instructions := @TimerExpire
@@ -115,30 +127,40 @@ case ConditionType
     instructions := @OnRising  
   4: 'OnFalling             
     instructions := @OnFalling
-  5: 'OnFalling             
+  5: 'WhileHigh             
     instructions := @WhileHigh
-  6: 'OnFalling             
-    instructions := @WhileLow                               
+  6: 'WhileLow             
+    instructions := @WhileLow
+  7: 'OnTrigger
+    instructions := @OnTrigger                             
 
 ' copy instructions into memory
 CogStop( EvtCog )
 insPtr:=NextIns              
-repeat                 
-  ins := long[instructions] 
-  if ins == 0
-    quit                                               
-  elseif (ins & $1FF) == 0                                        
-    long[insPtr] := (ins&$FFFC0000)|(ActionRet<<9)|(ActionType)
-  elseif (ins & $1FF) == 1
-    long[insPtr] := (ins&$FFFFFE00)|(ActionParam & $1FF)         
-  elseif (ins & $1FF) == 2
-    long[insPtr] := (ins&$FFFFFE00)|(ConditionParam & $1FF)
-  elseif (ins & $3FE00) == (2<<9)
-    long[insPtr] := (ins&$FFFC01FF)|((ConditionParam & $1FF)<<9)
-  else
-    long[insPtr] := ins
-  instructions += 4
+if ConditionType == -1                       
+  ins:=long[insPtr-8]                                        
+  long[insPtr] := (ins&$FFFFFE00)|(ActionParam & $1FF) 
   insPtr += 4
+  ins:=long[insPtr-8]                                   
+  long[insPtr] := (ins&$FFFC0000)|(ActionRet<<9)|(ActionType)
+  insPtr += 4
+else
+  repeat                 
+    ins := long[instructions] 
+    if ins == 0
+      quit                                               
+    elseif (ins & $1FF) == 0                                        
+      long[insPtr] := (ins&$FFFC0000)|(ActionRet<<9)|(ActionType)
+    elseif (ins & $1FF) == 1
+      long[insPtr] := (ins&$FFFFFE00)|(ActionParam & $1FF)         
+    elseif (ins & $1FF) == 2
+      long[insPtr] := (ins&$FFFFFE00)|(ConditionParam & $1FF)
+    elseif (ins & $3FE00) == (2<<9)
+      long[insPtr] := (ins&$FFFC01FF)|((ConditionParam & $1FF)<<9)
+    else
+      long[insPtr] := ins
+    instructions += 4
+    insPtr += 4
 long[insPtr] := JMPLOOP
 NextIns := insPtr          
 EvtCog := CogNew(@EventCog, 0 )
@@ -157,7 +179,7 @@ long    $AAFFAAFF
 JMPLOOP       jmp       #EventLoop
 
 
-
+              
 Always        MOV       r1,     #ActPar
               jmpret    Placeholder,#Placeholder
               long      0
@@ -207,6 +229,12 @@ TimerExpire
               MOV       r1,     #ActPar
   if_nz_and_c jmpret    Placeholder,#Placeholder                
               long      0
+OnTrigger                                 
+              mov       r2,     #CondPar    
+              cmp       r2,     TriggerVal      WZ
+              mov       r1,     #ActPar
+        if_z  jmpret    Placeholder, #Placeholder
+               
 DAT
 org 0
 EventCog
@@ -214,10 +242,12 @@ jmp #EventLoopStart
 long 0 [3]
 'define some registers. everything must be defined before the code, not after
 inputs        long      0       ' state of input pins 
-chanOut       long      0       ' state of output pins 
+chanOut       long      0       ' state of output pins
+eventChanOut  long      0       ' state of output pins, due to events
 changedIns    long      0       ' pins that have changed
 prevIns       long      0       ' previous state of input pins
-chanDir       long      0       ' channel directions                   
+chanDir       long      0       ' channel directions
+                  
 
 r1            long      0
 r2            long      0
@@ -232,11 +262,13 @@ pDigOut       long      0
 pDigIn        long      0                                
 pAIChannels   long      0       ' pointer to active channels
 pAIChange     long      0       ' pointer to changed channels
+pTriggers     long      0
 MSB           long      $80000000
 Neg1          long      -1      
 halfCycle     long      $80000001
 Zero          long      0
 
+TriggerVal    long      0       ' external triggers
 Timers        long      0[16]    ' Each timer has 2 longs        
                           
 ' defined actions:
@@ -271,11 +303,21 @@ EnableTimer
         movs  :delay,   r1        
         mov   r2,       cnt
 :delay  ADD   r2,       Timers
-        cmp   r2,       #0      WZ
-   if_z add   r2,       #1 
+        add   r2,       #1      'ensure r2!=0 without modifying flags with a cmp
 :enable MOV   Timers ,r2
 EnableTimer_ret ret
 
+DOHigh
+        shl   r1,       #cDigitalPin
+        or    eventChanOut,     r1
+DOHigh_ret ret
+
+DOLow
+        shl   r1,       #cDigitalPin
+        xor   r1,       Neg1
+        and   eventChanOut,     r1
+DOLow_ret ret            
+           
                                    
 readInput                            
               mov       prevIns,inputs         ' save state 
@@ -313,12 +355,17 @@ EventLoop
               'set digital outputs
               rdlong    chanOut,pDigOut         WZ                      
               shl       chanOut,#cDigitalPin    ' read state of output pins
-              and       chanOut,outMask        ' only set output pins  
-              mov       outa,   chanOut 
+              and       chanOut,outMask         ' only set output pins  
+              or        chanOut,eventChanOut    ' or with event information
+              mov       outa,   chanOut
+              'load external triggers                  
+              rdlong    TriggerVal, pTriggers  WZ
+        if_nz mov       r1, #0
+        if_nz wrlong    r1,     pTriggers
               
 EventLoopEnd  jmp       #EventLoop 
 
-long    $00000000[400]
+long    $00000000[cEvtLoopLen]
 
 jmp     #EventLoopEnd   ' if code falls through to here, break something so we notice
 fit 496                                   

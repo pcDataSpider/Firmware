@@ -8,12 +8,9 @@ con
   BAUD = 115200       
   MAX_BUFFER = 1000              ' maximum length of the main buffer in bytes
   EX_DAT_LEN = 50               ' lenth of ExData
-  MAX_WAITING = 10            ' max allowed sent messages to be waiting for timeout
-  WAITING_SIZE = 10             ' size(in bytes) that one message's info consumes
   DEBUG = 0
   BUFDUMP = 0
-  MSG_SIZE = 20
-  MAX_MSG = 30                             '<XXX................>
+  MAX_MSG = 128                             '<XXX................>
 
                          
   DPIN1 = 16
@@ -22,9 +19,6 @@ con
   DPIN4 = 19
                                           '<XXXp:19,#0000,#0000>
                       
-  TIMEOUT = 80000000
-  'TIMEOUT = 800000
-  '<!zd:XX,#zzzz>
   
   EOP = 124
   ESC = 96     
@@ -37,8 +31,6 @@ obj
   Val   :       "Queue" 
   Tmp   :       "Queue"
   Tmp2  :       "Queue" 
-  Waiting    :  "Queue"
-  WaitingMsg :  "Queue"   
 
 dat 'global shared data                                    
 
@@ -60,14 +52,7 @@ dat 'global shared data
    Buffer     byte 0[MAX_BUFFER]
    PacketBuffer byte 0[MAX_MSG]
    SendBuffer byte 0[MAX_MSG] 
-
-
-   Tout       long 0 'next timeout for repeating messages
-   ToutTaken  long 0 'cnt when Tout was taken, used for clk overflow
-   WaitingInfo long 0[MAX_WAITING * WAITING_SIZE] ' buffer for waiting repeating message info
-   WaitingBuf byte 0[MAX_WAITING * MSG_SIZE] ' buffer used to store repeating messages
-   eIDBuf     long 0[128]  
-
+ 
 pub main         
 
   
